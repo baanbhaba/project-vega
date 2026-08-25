@@ -38,17 +38,20 @@ pub fn watch_directory(
             match result {
                 Ok(event) => {
                     use notify::EventKind::*;
+                    use notify::event::ModifyKind;
                     let paths = event.paths;
                     let watch_event = match event.kind {
                         Create(_) => paths.into_iter().next().map(WatchEvent::Created),
-                        Modify(_) => paths.into_iter().next().map(WatchEvent::Modified),
-                        Remove(_) => paths.into_iter().next().map(WatchEvent::Removed),
-                        notify::EventKind::Rename(_) => {
+                        Modify(ModifyKind::Data(_)) => {
+                            paths.into_iter().next().map(WatchEvent::Modified)
+                        }
+                        Modify(ModifyKind::Name(_)) => {
                             let mut iter = paths.into_iter();
                             let from = iter.next();
                             let to = iter.next();
                             from.map(|f| WatchEvent::Renamed { from: f, to })
                         }
+                        Remove(_) => paths.into_iter().next().map(WatchEvent::Removed),
                         _ => None,
                     };
                     if let Some(ev) = watch_event {

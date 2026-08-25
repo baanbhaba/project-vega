@@ -160,7 +160,7 @@ fn categorize(ext: &str, is_dir: bool, meta: &std::fs::Metadata) -> FileCategory
 
         // Video
         "mp4" | "mkv" | "mov" | "avi" | "webm" | "flv" | "wmv" | "m4v" | "ogv"
-        | "3gp" | "ts" | "m2ts" => FileCategory::Video,
+        | "3gp" | "m2ts" => FileCategory::Video,
 
         // Audio
         "mp3" | "flac" | "wav" | "ogg" | "opus" | "m4a" | "aac" | "wma" | "aiff"

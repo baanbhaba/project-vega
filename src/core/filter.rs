@@ -4,7 +4,7 @@
 // used by the Helix editor). Filters a slice of FileEntry structs by
 // a query string in microseconds even across 100k+ entries.
 
-use nucleo::{Config as NucleoConfig, Nucleo, Utf32Str};
+use nucleo_matcher::Utf32Str;
 
 use crate::core::entry::FileEntry;
 

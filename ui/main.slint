@@ -1,6 +1,26 @@
 // Vega File Manager — Main Slint UI Definition
 // Dark minimalist theme: OLED black / slate charcoal with accent colors
 
+import { ScrollView } from "std-widgets.slint";
+
+// ── Data Structs (exported so Rust can use them via include_modules!) ────────
+export struct PlaceData {
+    name: string,
+    path: string,
+}
+
+export struct EntryData {
+    name: string,
+    size: string,
+    modified: string,
+    permissions: string,
+    git-label: string,
+    name-color: color,
+    git-color: color,
+    is-dir: bool,
+    selected: bool,
+}
+
 // ── Palette ─────────────────────────────────────────────────────────────────
 global Palette {
     // Backgrounds
@@ -267,7 +287,7 @@ component Toolbar inherits Rectangle {
 
 // ── Sidebar ──────────────────────────────────────────────────────────────────
 component Sidebar inherits Rectangle {
-    in property <[{name: string, path: string}]> places: [];
+    in property <[PlaceData]> places: [];
     callback navigate-to(string);
 
     width: Palette.sidebar-width;
@@ -370,18 +390,8 @@ export component MainWindow inherits Window {
     in property <string> item-count: "0 items";
     in property <string> selected-info: "";
     in property <string> disk-info: "";
-    in property <[{name: string, path: string}]> places: [];
-    in property <[{
-        name: string,
-        size: string,
-        modified: string,
-        permissions: string,
-        git-label: string,
-        name-color: color,
-        git-color: color,
-        is-dir: bool,
-        selected: bool,
-    }]> entries: [];
+    in property <[PlaceData]> places: [];
+    in property <[EntryData]> entries: [];
 
     // ── Callbacks (handled in Rust) ─────────────────────────────────────────
     callback navigate-to(string);

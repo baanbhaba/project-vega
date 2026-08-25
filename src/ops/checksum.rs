@@ -3,12 +3,12 @@
 // Fast multi-algorithm checksum computation.
 // BLAKE3 is preferred (parallelized internally, orders of magnitude faster than MD5/SHA256).
 
-use std::io::{self, Read};
+use std::io::Read;
 use std::path::Path;
 
 use blake3::Hasher as Blake3Hasher;
 use md5::{Digest as _, Md5};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 
 /// Supported checksum algorithms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -41,7 +41,7 @@ pub fn format_modified(time: Option<SystemTime>) -> String {
     }
 
     // Absolute date for older files
-    use chrono::{DateTime, Utc, Local};
+    use chrono::{DateTime, Local};
     let dt: DateTime<Local> = DateTime::from(t);
     dt.format("%Y-%m-%d").to_string()
 }

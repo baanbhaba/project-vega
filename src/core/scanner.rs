@@ -4,7 +4,7 @@
 // Streams FileEntry chunks to the UI via a flume channel as fast as
 // the OS can read directory entries — no full-buffer wait before first render.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 

@@ -17,11 +17,10 @@ use slint::{ModelRc, SharedString, VecModel, Color};
 
 use crate::core::entry::{FileCategory, GitStatus};
 use crate::core::scanner::{scan_directory, ScanConfig, ScanEvent};
-use crate::core::tags;
 use crate::utils::human::{format_bytes, format_modified};
 use crate::utils::paths::{collapse_home, xdg_places};
 
-// Include the generated Slint bindings
+// Include the generated Slint bindings (EntryData, PlaceData, MainWindow)
 slint::include_modules!();
 
 fn main() -> anyhow::Result<()> {
@@ -36,43 +35,25 @@ fn main() -> anyhow::Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs_next::home_dir().unwrap_or_else(|| PathBuf::from("/")));
 
-    // Navigation history stack
-    let history: Arc<parking_lot::Mutex<Vec<PathBuf>>> =
-        Arc::new(parking_lot::Mutex::new(vec![start_dir.clone()]));
-    let history_pos: Arc<std::sync::atomic::AtomicUsize> =
-        Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
     // Cancellation token for in-flight scans
     let cancel = Arc::new(AtomicBool::new(false));
 
-    // ── Populate places sidebar ──────────────────────────────────────────────
-    let places_data: Vec<_> = xdg_places()
-        .into_iter()
-        .map(|(name, path)| {
-            let name_s: SharedString = name.into();
-            let path_s: SharedString = path.display().to_string().into();
-            slint::format!("{}", name_s); // dummy use to avoid warnings
-            (name_s, path_s)
-        })
-        .collect();
-
+    // ── Populate sidebar places ──────────────────────────────────────────────
     {
         let w = weak.upgrade().unwrap();
-        // Build a ModelRc for places
-        // Using anonymous struct via slint's VecModel
-        let places_model = VecModel::default();
-        for (name, path) in &places_data {
-            places_model.push(slint::format!("{}", ""));
-        }
-        // Note: in production we'd use typed struct model — simplified here for bootstrap
+        let places_vec: Vec<PlaceData> = xdg_places()
+            .into_iter()
+            .map(|(name, path)| PlaceData {
+                name: name.into(),
+                path: path.display().to_string().into(),
+            })
+            .collect();
+        let model = VecModel::from(places_vec);
+        w.set_places(ModelRc::new(model));
     }
 
     // ── Initial directory load ───────────────────────────────────────────────
-    navigate_to(
-        weak.clone(),
-        start_dir.clone(),
-        cancel.clone(),
-    );
+    navigate_to(weak.clone(), start_dir.clone(), cancel.clone());
 
     // ── Toolbar callbacks ─────────────────────────────────────────────────────
     {
@@ -98,30 +79,28 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
-    {
-        let weak2 = weak.clone();
-        let cancel2 = cancel.clone();
-        window.on_entry_double_clicked(move |index| {
-            // TODO: get the entry from current model and navigate/open it
-            log::info!("Double clicked entry at index {}", index);
-        });
-    }
+    window.on_entry_double_clicked(move |index| {
+        log::info!("Double clicked entry at index {}", index);
+    });
 
     window.on_open_command_palette(|| {
-        log::info!("Command palette requested (TODO: implement overlay)");
+        log::info!("Command palette requested");
     });
 
     window.on_go_back(|| {
-        log::info!("Go back (TODO: implement history)");
+        log::info!("Go back (TODO: history)");
     });
 
     window.on_go_forward(|| {
-        log::info!("Go forward (TODO: implement history)");
+        log::info!("Go forward (TODO: history)");
     });
 
     window.on_toggle_hidden(|| {
-        log::info!("Toggle hidden (TODO: implement config toggle)");
+        log::info!("Toggle hidden files");
     });
+
+    window.on_entry_clicked(|_| {});
+    window.on_filter_changed(|_| {});
 
     // ── Run ─────────────────────────────────────────────────────────────────
     window.run()?;
@@ -137,16 +116,11 @@ fn navigate_to(
 ) {
     // Signal any running scan to stop
     cancel.store(true, Ordering::Relaxed);
-    // Small yield to let the old scan notice
     std::thread::sleep(std::time::Duration::from_millis(2));
     cancel.store(false, Ordering::Relaxed);
 
-    // Update displayed path immediately — sub-ms feedback
-    {
-        let w = match weak.upgrade() {
-            Some(w) => w,
-            None => return,
-        };
+    // Update displayed path immediately
+    if let Some(w) = weak.upgrade() {
         w.set_current_path(collapse_home(&dir).into());
         w.set_item_count("Loading…".into());
     }
@@ -159,7 +133,6 @@ fn navigate_to(
         let config = ScanConfig::default();
         let rx = scan_directory(dir_clone.clone(), config, cancel_clone);
 
-        // Accumulate all entries then push to UI in one batch per chunk
         let mut all_entries: Vec<core::entry::FileEntry> = Vec::new();
 
         // Check for git repo status
@@ -171,42 +144,26 @@ fn navigate_to(
             None => (String::new(), std::collections::HashMap::new()),
         };
 
-        // Update branch display
-        {
-            let branch_s: SharedString = git_branch.clone().into();
-            let w_ref = weak_clone.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = w_ref.upgrade() {
-                    w.set_git_branch(branch_s);
-                }
-            });
-        }
+        // Update branch badge
+        let branch_s: SharedString = git_branch.clone().into();
+        let w_ref = weak_clone.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = w_ref.upgrade() {
+                w.set_git_branch(branch_s);
+            }
+        });
 
         loop {
             match rx.recv() {
                 Ok(ScanEvent::Entries(mut batch)) => {
-                    // Enrich with git status
                     for entry in &mut batch {
                         if let Some(gs) = git_statuses.get(&entry.path) {
                             entry.git_status = gs.clone();
                         }
                     }
-                    all_entries.extend(batch.clone());
-
-                    // Stream first batch to UI immediately for fast first paint
-                    let ui_entries = entries_to_slint(&batch);
-                    let w_ref = weak_clone.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = w_ref.upgrade() {
-                            // Append to existing model — first render in <5ms
-                            // For simplicity in bootstrap, rebuild full model
-                            // TODO: incremental append with ModelRc
-                            let _ = ui_entries; // used below
-                        }
-                    });
+                    all_entries.extend(batch);
                 }
                 Ok(ScanEvent::Done { total }) => {
-                    // Final full update with complete sorted list
                     let ui_rows = entries_to_slint(&all_entries);
                     let count_str: SharedString =
                         format!("{} item{}", total, if total == 1 { "" } else { "s" }).into();
@@ -214,7 +171,6 @@ fn navigate_to(
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = w_ref.upgrade() {
                             w.set_item_count(count_str);
-                            // Build typed VecModel and set on window
                             let model = VecModel::from(ui_rows);
                             w.set_entries(ModelRc::new(model));
                         }
@@ -232,33 +188,32 @@ fn navigate_to(
                     });
                     break;
                 }
-                Err(_) => break, // Channel closed
+                Err(_) => break,
             }
         }
     });
 }
 
-/// Map a FileCategory to its display color as a Slint Color.
+/// Map FileCategory to its accent Color.
 fn category_color(cat: &FileCategory) -> Color {
     match cat {
         FileCategory::Directory  => Color::from_rgb_u8(240, 240, 240),
-        FileCategory::Code       => Color::from_rgb_u8(97, 210, 240),
+        FileCategory::Code       => Color::from_rgb_u8(97,  210, 240),
         FileCategory::Document   => Color::from_rgb_u8(240, 210, 97),
-        FileCategory::Image      => Color::from_rgb_u8(192, 97, 240),
-        FileCategory::Video      => Color::from_rgb_u8(160, 97, 240),
-        FileCategory::Audio      => Color::from_rgb_u8(97, 240, 180),
+        FileCategory::Image      => Color::from_rgb_u8(192, 97,  240),
+        FileCategory::Video      => Color::from_rgb_u8(160, 97,  240),
+        FileCategory::Audio      => Color::from_rgb_u8(97,  240, 180),
         FileCategory::Archive    => Color::from_rgb_u8(240, 160, 97),
-        FileCategory::Executable => Color::from_rgb_u8(97, 240, 112),
+        FileCategory::Executable => Color::from_rgb_u8(97,  240, 112),
         FileCategory::Data       => Color::from_rgb_u8(240, 126, 97),
         FileCategory::Unknown    => Color::from_rgb_u8(112, 112, 112),
     }
 }
 
-/// Map a GitStatus to a short display label.
+/// Map GitStatus to a short label string.
 fn git_label(gs: &GitStatus) -> &'static str {
     match gs {
-        GitStatus::None      => "",
-        GitStatus::Clean     => "",
+        GitStatus::None | GitStatus::Clean => "",
         GitStatus::Untracked => "U",
         GitStatus::Modified  => "M",
         GitStatus::Staged    => "S",
@@ -266,32 +221,32 @@ fn git_label(gs: &GitStatus) -> &'static str {
     }
 }
 
-/// Map a GitStatus to its display color as a Slint Color.
+/// Map GitStatus to its Color.
 fn git_color(gs: &GitStatus) -> Color {
     match gs {
-        GitStatus::Untracked => Color::from_rgb_u8(97, 240, 112),
+        GitStatus::Untracked => Color::from_rgb_u8(97,  240, 112),
         GitStatus::Modified  => Color::from_rgb_u8(240, 210, 97),
-        GitStatus::Staged    => Color::from_rgb_u8(97, 210, 240),
-        GitStatus::Conflict  => Color::from_rgb_u8(240, 97, 97),
-        _                    => Color::from_rgb_u8(85, 85, 85),
+        GitStatus::Staged    => Color::from_rgb_u8(97,  210, 240),
+        GitStatus::Conflict  => Color::from_rgb_u8(240, 97,  97),
+        _                    => Color::from_rgb_u8(85,  85,  85),
     }
 }
 
-/// Convert a slice of FileEntry into the anonymous struct type expected by
-/// the Slint `entries` property (must match the struct defined in main.slint).
+/// Convert FileEntry slice into Slint EntryData structs.
+/// Note: Slint renames dash-fields to underscore in Rust (git-label → git_label).
 fn entries_to_slint(entries: &[core::entry::FileEntry]) -> Vec<EntryData> {
     entries
         .iter()
         .map(|e| EntryData {
-            name: e.name.clone().into(),
-            size: format_bytes(e.size).into(),
-            modified: format_modified(e.modified).into(),
+            name:        e.name.clone().into(),
+            size:        format_bytes(e.size).into(),
+            modified:    format_modified(e.modified).into(),
             permissions: e.permissions.clone().into(),
-            git_label: git_label(&e.git_status).into(),
-            name_color: category_color(&e.category),
-            git_color: git_color(&e.git_status),
-            is_dir: e.is_dir,
-            selected: e.selected,
+            git_label:   git_label(&e.git_status).into(),
+            name_color:  category_color(&e.category),
+            git_color:   git_color(&e.git_status),
+            is_dir:      e.is_dir,
+            selected:    e.selected,
         })
         .collect()
 }

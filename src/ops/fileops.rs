@@ -102,17 +102,20 @@ pub fn move_files(
             let dest = dest_dir.join(src.file_name().unwrap_or_default());
 
             // Try atomic rename first (same filesystem)
-            let result = std::fs::rename(src, &dest).or_else(|_| {
-                // Cross-device: copy then delete
-                if src.is_dir() {
-                    copy_dir_recursive(src, &dest, &cancel)?;
-                    std::fs::remove_dir_all(src).map(|_| 0u64)
-                } else {
-                    copy_single_file(src, &dest)?;
-                    let _ = std::fs::remove_file(src);
-                    Ok(0u64)
-                }
-            });
+            let result: anyhow::Result<()> = std::fs::rename(src, &dest)
+                .map(|_| ())
+                .map_err(anyhow::Error::from)
+                .or_else(|_| {
+                    // Cross-device: copy then delete
+                    if src.is_dir() {
+                        copy_dir_recursive(src, &dest, &cancel)?;
+                        std::fs::remove_dir_all(src).map_err(anyhow::Error::from)?;
+                    } else {
+                        copy_single_file(src, &dest)?;
+                        let _ = std::fs::remove_file(src);
+                    }
+                    Ok(())
+                });
 
             match result {
                 Ok(_) => {

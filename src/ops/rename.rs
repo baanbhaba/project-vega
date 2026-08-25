@@ -39,7 +39,11 @@ pub fn preview_rename(
 
     for (counter, path) in files.iter().enumerate() {
         let dir = path.parent().unwrap_or(Path::new(""));
-        let filename = path.file_name().unwrap_or_default().to_string_lossy();
+        let filename: String = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
 
         let (subject, ext_part) = if config.name_only {
             let stem = path
@@ -53,7 +57,7 @@ pub fn preview_rename(
                 .unwrap_or_default();
             (stem, ext)
         } else {
-            (filename.into_owned(), String::new())
+            (filename.clone(), String::new())
         };
 
         if !re.is_match(&subject) {
