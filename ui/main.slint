@@ -1,0 +1,481 @@
+// Vega File Manager — Main Slint UI Definition
+// Dark minimalist theme: OLED black / slate charcoal with accent colors
+
+// ── Palette ─────────────────────────────────────────────────────────────────
+global Palette {
+    // Backgrounds
+    out property <color> bg-base:      #0d0d0d;   // OLED black
+    out property <color> bg-surface:   #161616;   // Panel surface
+    out property <color> bg-elevated:  #1e1e1e;   // Elevated cards / modals
+    out property <color> bg-hover:     #252525;   // Item hover
+    out property <color> bg-selected:  #2a2a3a;   // Item selected
+
+    // Text
+    out property <color> text-primary:   #f0f0f0;
+    out property <color> text-secondary: #909090;
+    out property <color> text-dim:       #555555;
+
+    // Accent
+    out property <color> accent:         #7c6af0;  // Purple-violet accent
+    out property <color> accent-dim:     #3d3578;
+
+    // File category colors
+    out property <color> cat-code:       #61d2f0;  // Cyan
+    out property <color> cat-document:   #f0d261;  // Amber
+    out property <color> cat-image:      #c061f0;  // Violet
+    out property <color> cat-video:      #a061f0;  // Purple
+    out property <color> cat-audio:      #61f0b4;  // Mint
+    out property <color> cat-archive:    #f0a061;  // Orange
+    out property <color> cat-executable: #61f070;  // Emerald
+    out property <color> cat-data:       #f07e61;  // Coral
+    out property <color> cat-dir:        #f0f0f0;  // White
+    out property <color> cat-unknown:    #707070;  // Grey
+
+    // Git status colors
+    out property <color> git-untracked: #61f070;   // Green
+    out property <color> git-modified:  #f0d261;   // Yellow
+    out property <color> git-staged:    #61d2f0;   // Cyan
+    out property <color> git-conflict:  #f06161;   // Red
+
+    // Borders
+    out property <color> border:        #2a2a2a;
+    out property <color> border-focus:  #7c6af0;
+
+    // Sizes
+    out property <length> sidebar-width: 220px;
+    out property <length> toolbar-height: 42px;
+    out property <length> row-height: 28px;
+    out property <length> radius: 6px;
+}
+
+// ── Reusable Components ──────────────────────────────────────────────────────
+
+// A single file row in the detail list view.
+component FileRow inherits Rectangle {
+    in property <string>  name;
+    in property <string>  size;
+    in property <string>  modified;
+    in property <string>  permissions;
+    in property <string>  git-label;
+    in property <color>   name-color: Palette.text-primary;
+    in property <color>   git-color:  Palette.text-dim;
+    in property <bool>    selected: false;
+    in property <bool>    is-dir: false;
+    callback clicked();
+    callback double-clicked();
+
+    height: Palette.row-height;
+    background: selected ? Palette.bg-selected : transparent;
+    border-radius: Palette.radius;
+
+    // Hover state
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+        double-clicked => { root.double-clicked(); }
+    }
+    Rectangle {
+        background: ta.has-hover && !selected ? Palette.bg-hover : transparent;
+        border-radius: Palette.radius;
+        x: 0; y: 0;
+        width: root.width; height: root.height;
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 0px;
+
+        // Icon placeholder (will become a real SVG icon in Milestone 4)
+        Rectangle {
+            width: 20px;
+            height: Palette.row-height;
+            Text {
+                text: is-dir ? "📁" : "📄";
+                font-size: 13px;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+
+        // Name
+        Text {
+            text: name;
+            color: name-color;
+            font-size: 13px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        // Git badge
+        Rectangle {
+            width: 60px;
+            Text {
+                text: git-label;
+                color: git-color;
+                font-size: 11px;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+
+        // Size
+        Rectangle {
+            width: 80px;
+            Text {
+                text: size;
+                color: Palette.text-secondary;
+                font-size: 12px;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+        }
+
+        // Modified
+        Rectangle {
+            width: 100px;
+            Text {
+                text: modified;
+                color: Palette.text-secondary;
+                font-size: 12px;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+        }
+
+        // Permissions
+        Rectangle {
+            width: 90px;
+            Text {
+                text: permissions;
+                color: Palette.text-dim;
+                font-family: "monospace";
+                font-size: 11px;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+        }
+    }
+}
+
+// ── Toolbar ──────────────────────────────────────────────────────────────────
+component Toolbar inherits Rectangle {
+    in-out property <string> current-path: "/";
+    in property <string> git-branch: "";
+    callback navigate-to(string);
+    callback go-back();
+    callback go-forward();
+    callback go-up();
+    callback toggle-hidden();
+    callback open-command-palette();
+
+    height: Palette.toolbar-height;
+    background: Palette.bg-surface;
+    border-width: 0px;
+
+    HorizontalLayout {
+        padding: 6px;
+        spacing: 4px;
+
+        // Back button
+        Rectangle {
+            width: 28px; height: 28px;
+            background: back-ta.has-hover ? Palette.bg-hover : transparent;
+            border-radius: Palette.radius;
+            back-ta := TouchArea { clicked => { root.go-back(); } }
+            Text { text: "◀"; font-size: 12px; color: Palette.text-secondary;
+                   vertical-alignment: center; horizontal-alignment: center; }
+        }
+
+        // Forward button
+        Rectangle {
+            width: 28px; height: 28px;
+            background: fwd-ta.has-hover ? Palette.bg-hover : transparent;
+            border-radius: Palette.radius;
+            fwd-ta := TouchArea { clicked => { root.go-forward(); } }
+            Text { text: "▶"; font-size: 12px; color: Palette.text-secondary;
+                   vertical-alignment: center; horizontal-alignment: center; }
+        }
+
+        // Up button
+        Rectangle {
+            width: 28px; height: 28px;
+            background: up-ta.has-hover ? Palette.bg-hover : transparent;
+            border-radius: Palette.radius;
+            up-ta := TouchArea { clicked => { root.go-up(); } }
+            Text { text: "↑"; font-size: 14px; color: Palette.text-secondary;
+                   vertical-alignment: center; horizontal-alignment: center; }
+        }
+
+        // Path input
+        Rectangle {
+            horizontal-stretch: 1;
+            height: 28px;
+            background: Palette.bg-elevated;
+            border-radius: Palette.radius;
+            border-width: 1px;
+            border-color: Palette.border;
+
+            path-input := TextInput {
+                x: 8px; y: 0;
+                width: parent.width - 16px;
+                height: parent.height;
+                text: current-path;
+                color: Palette.text-primary;
+                font-size: 13px;
+                vertical-alignment: center;
+                accepted => { root.navigate-to(self.text); }
+            }
+        }
+
+        // Git branch badge
+        if git-branch != "" : Rectangle {
+            height: 28px;
+            width: git-branch-label.preferred-width + 20px;
+            background: Palette.accent-dim;
+            border-radius: Palette.radius;
+            git-branch-label := Text {
+                x: 10px;
+                text: "⎇ " + git-branch;
+                color: Palette.accent;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+        }
+
+        // Command palette button
+        Rectangle {
+            width: 28px; height: 28px;
+            background: cmd-ta.has-hover ? Palette.bg-hover : transparent;
+            border-radius: Palette.radius;
+            cmd-ta := TouchArea { clicked => { root.open-command-palette(); } }
+            Text { text: "⌘"; font-size: 14px; color: Palette.text-secondary;
+                   vertical-alignment: center; horizontal-alignment: center; }
+        }
+
+        // Show/hide hidden files toggle
+        Rectangle {
+            width: 28px; height: 28px;
+            background: hidden-ta.has-hover ? Palette.bg-hover : transparent;
+            border-radius: Palette.radius;
+            hidden-ta := TouchArea { clicked => { root.toggle-hidden(); } }
+            Text { text: "👁"; font-size: 12px; color: Palette.text-secondary;
+                   vertical-alignment: center; horizontal-alignment: center; }
+        }
+    }
+}
+
+// ── Sidebar ──────────────────────────────────────────────────────────────────
+component Sidebar inherits Rectangle {
+    in property <[{name: string, path: string}]> places: [];
+    callback navigate-to(string);
+
+    width: Palette.sidebar-width;
+    background: Palette.bg-surface;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 2px;
+
+        // Places header
+        Text {
+            text: "PLACES";
+            color: Palette.text-dim;
+            font-size: 10px;
+            letter-spacing: 1.5px;
+            height: 24px;
+            vertical-alignment: center;
+        }
+
+        for place in places : Rectangle {
+            height: 30px;
+            background: place-ta.has-hover ? Palette.bg-hover : transparent;
+            border-radius: Palette.radius;
+            place-ta := TouchArea {
+                clicked => { root.navigate-to(place.path); }
+            }
+            Text {
+                x: 12px;
+                text: place.name;
+                color: Palette.text-secondary;
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+        }
+
+        Rectangle { height: 1px; background: Palette.border; }
+
+        // Search box
+        Text {
+            text: "FILTER";
+            color: Palette.text-dim;
+            font-size: 10px;
+            letter-spacing: 1.5px;
+            height: 24px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// ── Status Bar ───────────────────────────────────────────────────────────────
+component StatusBar inherits Rectangle {
+    in property <string> item-count: "0 items";
+    in property <string> selected-info: "";
+    in property <string> disk-info: "";
+
+    height: 24px;
+    background: Palette.bg-surface;
+    border-width: 0px;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 16px;
+
+        Text {
+            text: item-count;
+            color: Palette.text-secondary;
+            font-size: 11px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: selected-info;
+            color: Palette.accent;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: disk-info;
+            color: Palette.text-dim;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// ── Main Window ──────────────────────────────────────────────────────────────
+export component MainWindow inherits Window {
+    title: "Vega";
+    background: Palette.bg-base;
+    preferred-width: 1280px;
+    preferred-height: 800px;
+    min-width: 800px;
+    min-height: 500px;
+
+    // ── Exposed properties (set from Rust) ──────────────────────────────────
+    in-out property <string> current-path: "/home";
+    in property <string> git-branch: "";
+    in property <string> filter-text: "";
+    in property <string> item-count: "0 items";
+    in property <string> selected-info: "";
+    in property <string> disk-info: "";
+    in property <[{name: string, path: string}]> places: [];
+    in property <[{
+        name: string,
+        size: string,
+        modified: string,
+        permissions: string,
+        git-label: string,
+        name-color: color,
+        git-color: color,
+        is-dir: bool,
+        selected: bool,
+    }]> entries: [];
+
+    // ── Callbacks (handled in Rust) ─────────────────────────────────────────
+    callback navigate-to(string);
+    callback go-back();
+    callback go-forward();
+    callback go-up();
+    callback toggle-hidden();
+    callback open-command-palette();
+    callback entry-clicked(int);
+    callback entry-double-clicked(int);
+    callback filter-changed(string);
+
+    // ── Layout ──────────────────────────────────────────────────────────────
+    VerticalLayout {
+        spacing: 0px;
+
+        // Toolbar
+        Toolbar {
+            current-path <=> root.current-path;
+            git-branch: root.git-branch;
+            navigate-to(p) => { root.navigate-to(p); }
+            go-back => { root.go-back(); }
+            go-forward => { root.go-forward(); }
+            go-up => { root.go-up(); }
+            toggle-hidden => { root.toggle-hidden(); }
+            open-command-palette => { root.open-command-palette(); }
+        }
+
+        // Column header bar
+        Rectangle {
+            height: 24px;
+            background: Palette.bg-surface;
+            border-width: 0px;
+            HorizontalLayout {
+                padding-left: 36px;
+                padding-right: 8px;
+                Text { text: "Name"; color: Palette.text-dim; font-size: 11px;
+                       vertical-alignment: center; horizontal-stretch: 1; }
+                Rectangle { width: 60px; Text { text: "Git"; color: Palette.text-dim;
+                    font-size: 11px; vertical-alignment: center; horizontal-alignment: center; } }
+                Rectangle { width: 80px; Text { text: "Size"; color: Palette.text-dim;
+                    font-size: 11px; vertical-alignment: center; horizontal-alignment: right; } }
+                Rectangle { width: 100px; Text { text: "Modified"; color: Palette.text-dim;
+                    font-size: 11px; vertical-alignment: center; horizontal-alignment: right; } }
+                Rectangle { width: 90px; Text { text: "Perms"; color: Palette.text-dim;
+                    font-size: 11px; vertical-alignment: center; horizontal-alignment: right; } }
+            }
+        }
+
+        // Main content row
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 0px;
+
+            // Sidebar
+            Sidebar {
+                places: root.places;
+                navigate-to(p) => { root.navigate-to(p); }
+            }
+
+            // Vertical divider
+            Rectangle { width: 1px; background: Palette.border; }
+
+            // File list — virtualized scroll
+            ScrollView {
+                horizontal-stretch: 1;
+                viewport-height: entries.length * Palette.row-height;
+
+                VerticalLayout {
+                    spacing: 1px;
+                    padding: 4px;
+
+                    for entry[i] in entries : FileRow {
+                        name: entry.name;
+                        size: entry.size;
+                        modified: entry.modified;
+                        permissions: entry.permissions;
+                        git-label: entry.git-label;
+                        name-color: entry.name-color;
+                        git-color: entry.git-color;
+                        is-dir: entry.is-dir;
+                        selected: entry.selected;
+                        clicked => { root.entry-clicked(i); }
+                        double-clicked => { root.entry-double-clicked(i); }
+                    }
+                }
+            }
+        }
+
+        // Status bar
+        StatusBar {
+            item-count: root.item-count;
+            selected-info: root.selected-info;
+            disk-info: root.disk-info;
+        }
+    }
+}
