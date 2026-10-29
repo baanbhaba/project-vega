@@ -272,7 +272,8 @@ component Toolbar inherits Rectangle {
     callback open-terminal();
     callback refresh();
     callback show-help();
-    public function focus-path() { path-input.focus(); }
+    public function focus-path() { path-input.focus(); path-input.select-all(); }
+    public function has-path-focus() -> bool { return path-input.has-focus; }
 
     height: Palette.toolbar-height;
     background: Palette.bg-surface;
@@ -343,7 +344,9 @@ component Sidebar inherits Rectangle {
     callback navigate-to(string);
     callback filter-changed(string);
     callback activate-first();
-    public function focus-filter() { filter-input.focus(); }
+    public function focus-filter() { filter-input.focus(); filter-input.select-all(); }
+    public function has-filter-focus() -> bool { return filter-input.has-focus; }
+    public function clear-filter() { filter-input.text = ""; root.filter-changed(""); }
 
     width: Palette.sidebar-width;
     background: Palette.bg-surface;
@@ -509,6 +512,7 @@ export component MainWindow inherits Window {
     in property <string> selected-info: "";
     in property <string> disk-info: "";
     in-out property <int> selected-index: -1;
+    in-out property <string> selected-name: "";
     in property <string> sort-column: "name";
     in property <string> sort-direction: "asc";
     in property <bool> is-selected-archive: false;
@@ -586,6 +590,34 @@ export component MainWindow inherits Window {
 
     fs := FocusScope {
         key-pressed(event) => {
+            // 1. If any modal dialog is active, ONLY Escape closes it. DO NOT run file shortcuts!
+            if root.dialog-visible || root.props-visible || root.help-visible {
+                if event.text == Key.Escape {
+                    root.dialog-visible = false;
+                    root.props-visible = false;
+                    root.help-visible = false;
+                    return accept;
+                }
+                return reject;
+            }
+
+            // 2. If the context menu is open, Escape closes it
+            if root.ctx-visible {
+                if event.text == Key.Escape {
+                    root.ctx-visible = false;
+                    return accept;
+                }
+            }
+
+            // 3. If an input field has focus, allow it to handle all typing/navigation/backspace!
+            if tb.has-path-focus() || sb.has-filter-focus() {
+                if event.text == Key.Escape {
+                    fs.focus();
+                    return accept;
+                }
+                return reject;
+            }
+
             if event.text == Key.UpArrow {
                 root.select-prev();
                 return accept;
@@ -603,10 +635,9 @@ export component MainWindow inherits Window {
                 return accept;
             }
             if event.text == Key.Escape {
-                root.dialog-visible = false;
-                root.props-visible = false;
-                root.help-visible = false;
                 root.ctx-visible = false;
+                root.selected-index = -1;
+                root.selected-name = "";
                 return accept;
             }
             if event.text == Key.F1 || event.text == "?" {
@@ -614,9 +645,12 @@ export component MainWindow inherits Window {
                 return accept;
             }
             if event.text == Key.F2 {
-                root.dialog-title = "Rename Item";
-                root.dialog-action = "rename";
-                root.dialog-visible = true;
+                if root.selected-index >= 0 && root.selected-name != "" {
+                    root.dialog-title = "Rename Item";
+                    root.dialog-value = root.selected-name;
+                    root.dialog-action = "rename";
+                    root.dialog-visible = true;
+                }
                 return accept;
             }
             if event.text == Key.F5 {
@@ -701,7 +735,10 @@ export component MainWindow inherits Window {
                 current-path <=> root.current-path;
                 git-branch: root.git-branch;
                 has-clipboard: root.has-clipboard;
-                navigate-to(p) => { root.navigate-to(p); }
+                navigate-to(p) => {
+                    sb.clear-filter();
+                    root.navigate-to(p);
+                }
                 go-back => { root.go-back(); }
                 go-forward => { root.go-forward(); }
                 go-up => { root.go-up(); }
@@ -733,7 +770,10 @@ export component MainWindow inherits Window {
                 sb := Sidebar {
                     places: root.places;
                     active-path: root.raw-current-path;
-                    navigate-to(p) => { root.navigate-to(p); }
+                    navigate-to(p) => {
+                        sb.clear-filter();
+                        root.navigate-to(p);
+                    }
                     filter-changed(q) => { root.filter-changed(q); }
                     activate-first => { root.activate-first(); }
                 }
@@ -930,9 +970,12 @@ export component MainWindow inherits Window {
                     icon: "✏️"; text: "Rename"; shortcut: "F2";
                     clicked => {
                         root.ctx-visible = false;
-                        root.dialog-title = "Rename Item";
-                        root.dialog-action = "rename";
-                        root.dialog-visible = true;
+                        if root.selected-index >= 0 && root.selected-name != "" {
+                            root.dialog-title = "Rename Item";
+                            root.dialog-value = root.selected-name;
+                            root.dialog-action = "rename";
+                            root.dialog-visible = true;
+                        }
                     }
                 }
                 ContextMenuItem {
@@ -1039,6 +1082,10 @@ export component MainWindow inherits Window {
                         color: Palette.text-primary;
                         font-size: 13px;
                         vertical-alignment: center;
+                        init => {
+                            self.focus();
+                            self.select-all();
+                        }
                         accepted => {
                             if root.dialog-action == "new_folder" {
                                 root.create-folder(self.text);

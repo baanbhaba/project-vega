@@ -7,24 +7,32 @@ use std::path::{Path, PathBuf};
 
 /// Expand `~` to the user's home directory.
 pub fn expand_tilde(path: &str) -> PathBuf {
-    if path == "~" {
+    let trimmed = path.trim();
+    if trimmed == "~" || trimmed == "~/" {
         if let Some(home) = dirs_next::home_dir() {
             return home;
         }
     }
-    if let Some(rest) = path.strip_prefix("~/") {
+    if let Some(rest) = trimmed.strip_prefix("~/") {
         if let Some(home) = dirs_next::home_dir() {
             return home.join(rest);
         }
     }
-    PathBuf::from(path)
+    PathBuf::from(trimmed)
 }
 
 /// Replace the home directory prefix with `~` for display.
 pub fn collapse_home(path: &Path) -> String {
     if let Some(home) = dirs_next::home_dir() {
+        if path == home {
+            return "~".to_string();
+        }
         if let Ok(rel) = path.strip_prefix(&home) {
-            return format!("~/{}", rel.display());
+            let rel_s = rel.display().to_string();
+            if rel_s.is_empty() {
+                return "~".to_string();
+            }
+            return format!("~/{}", rel_s);
         }
     }
     path.display().to_string()

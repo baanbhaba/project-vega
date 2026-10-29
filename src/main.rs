@@ -84,6 +84,7 @@ fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let window = MainWindow::new()?;
+    let _ = slint::set_xdg_app_id("Vega");
     let weak = window.as_weak();
 
     // Determine initial directory (safely filtering "%U" from desktop launchers)
@@ -132,7 +133,13 @@ fn main() -> anyhow::Result<()> {
                     navigate_to(weak_a.clone(), state_a.clone(), entry.path, true);
                 } else {
                     log::info!("Opening file: {}", entry.path.display());
-                    let _ = open::that(&entry.path);
+                    if open::that(&entry.path).is_err() {
+                        let _ = std::process::Command::new("kitty")
+                            .arg("-e")
+                            .arg("nvim")
+                            .arg(&entry.path)
+                            .spawn();
+                    }
                 }
             }
         })
@@ -268,6 +275,7 @@ fn main() -> anyhow::Result<()> {
                 );
                 if let Some(w) = weak_c.upgrade() {
                     w.set_selected_index(idx as i32);
+                    w.set_selected_name(entry.name.clone().into());
                     w.set_is_selected_archive(is_archive);
                     w.set_selected_info(selected_info.into());
                 }
@@ -310,6 +318,7 @@ fn main() -> anyhow::Result<()> {
             );
             if let Some(w) = weak_c.upgrade() {
                 w.set_selected_index(new_idx as i32);
+                w.set_selected_name(entry.name.clone().into());
                 w.invoke_ensure_visible(new_idx as i32);
                 w.set_is_selected_archive(is_archive);
                 w.set_selected_info(selected_info.into());
@@ -342,6 +351,7 @@ fn main() -> anyhow::Result<()> {
             );
             if let Some(w) = weak_c.upgrade() {
                 w.set_selected_index(new_idx as i32);
+                w.set_selected_name(entry.name.clone().into());
                 w.invoke_ensure_visible(new_idx as i32);
                 w.set_is_selected_archive(is_archive);
                 w.set_selected_info(selected_info.into());
@@ -415,6 +425,7 @@ fn main() -> anyhow::Result<()> {
                 w.set_sort_column(col_name.into());
                 w.set_sort_direction(dir_str.into());
                 w.set_selected_index(-1);
+                w.set_selected_name("".into());
                 w.set_entries(ModelRc::new(VecModel::from(ui_rows)));
             }
         });
@@ -449,6 +460,7 @@ fn main() -> anyhow::Result<()> {
             if let Some(w) = weak_c.upgrade() {
                 w.set_item_count(count_str);
                 w.set_selected_index(-1);
+                w.set_selected_name("".into());
                 w.set_selected_info("".into());
                 w.set_entries(ModelRc::new(VecModel::from(ui_rows)));
             }
@@ -994,6 +1006,7 @@ fn navigate_to(
 
         s.current_dir = dir.clone();
         s.selected_idx = None;
+        s.filter_query.clear();
 
         if push_history {
             if s.history.get(s.history_idx) != Some(&dir) {
@@ -1013,6 +1026,8 @@ fn navigate_to(
         w.set_raw_current_path(dir.display().to_string().into());
         w.set_item_count("Loading…".into());
         w.set_selected_index(-1);
+        w.set_selected_name("".into());
+        w.set_entries(ModelRc::new(VecModel::default()));
         w.set_is_selected_archive(false);
         w.set_selected_info("".into());
         w.set_git_branch("".into());
