@@ -86,9 +86,10 @@ fn main() -> anyhow::Result<()> {
     let window = MainWindow::new()?;
     let weak = window.as_weak();
 
-    // Determine initial directory
+    // Determine initial directory (safely filtering "%U" from desktop launchers)
     let start_dir: PathBuf = std::env::args()
         .nth(1)
+        .filter(|s| !s.trim().is_empty() && s != "%U" && s != "%u")
         .map(|s| expand_tilde(&s))
         .unwrap_or_else(|| dirs_next::home_dir().unwrap_or_else(|| PathBuf::from("/")));
 
@@ -107,6 +108,35 @@ fn main() -> anyhow::Result<()> {
         w.set_sort_column("name".into());
         w.set_sort_direction("asc".into());
     }
+
+    // ── Activation Handler with Strict 300ms Debounce ────────────────────────
+    let last_activation = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1)));
+    let activate_entry = {
+        let weak_a = weak.clone();
+        let state_a = state.clone();
+        let last_act = last_activation.clone();
+        Arc::new(move |idx: usize| {
+            let mut la = last_act.lock();
+            if la.elapsed() < Duration::from_millis(300) {
+                return; // Suppress duplicate triggers from rapid click + double-click events
+            }
+            *la = Instant::now();
+            drop(la);
+
+            let entry_opt = {
+                let s = state_a.lock();
+                s.displayed_entries.get(idx).cloned()
+            };
+            if let Some(entry) = entry_opt {
+                if entry.is_dir {
+                    navigate_to(weak_a.clone(), state_a.clone(), entry.path, true);
+                } else {
+                    log::info!("Opening file: {}", entry.path.display());
+                    let _ = open::that(&entry.path);
+                }
+            }
+        })
+    };
 
     // ── Initial Navigation ───────────────────────────────────────────────────
     navigate_to(weak.clone(), state.clone(), start_dir, false);
@@ -138,7 +168,7 @@ fn main() -> anyhow::Result<()> {
             } else if let Some(w) = weak_c.upgrade() {
                 let current = state_c.lock().current_dir.clone();
                 w.set_current_path(collapse_home(&current).into());
-                w.set_selected_info("Directory does not exist".into());
+                w.set_selected_info("Directory not found".into());
             }
         });
     }
@@ -195,51 +225,44 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
-    // ── Single Click & Double Click Detection ────────────────────────────────
+    // ── Click & Double Click Handling ────────────────────────────────────────
     let last_click_state = Arc::new(Mutex::new((None::<usize>, Instant::now())));
 
     {
         let weak_c = weak.clone();
         let state_c = state.clone();
         let lcs = last_click_state.clone();
+        let act = activate_entry.clone();
         window.on_entry_clicked(move |index| {
             let idx = index as usize;
             let now = Instant::now();
 
-            // Software double-click detection (bulletproof on Wayland/Hyprland)
             let is_double_click = {
                 let mut l = lcs.lock();
-                let is_dc = l.0 == Some(idx) && now.duration_since(l.1) < Duration::from_millis(400);
-                *l = (Some(idx), now);
+                let is_dc = l.0 == Some(idx) && now.duration_since(l.1) < Duration::from_millis(380);
+                if is_dc {
+                    *l = (None, now);
+                } else {
+                    *l = (Some(idx), now);
+                }
                 is_dc
             };
 
             if is_double_click {
-                let entry_opt = {
-                    let s = state_c.lock();
-                    s.displayed_entries.get(idx).cloned()
-                };
-                if let Some(entry) = entry_opt {
-                    if entry.is_dir {
-                        navigate_to(weak_c.clone(), state_c.clone(), entry.path, true);
-                    } else {
-                        log::info!("Opening file: {}", entry.path.display());
-                        let _ = open::that(&entry.path);
-                    }
-                }
+                act(idx);
                 return;
             }
 
-            // Single click: update selection and status bar WITHOUT rebuilding model
+            // Single click: update selection and status bar without rebuilding model
             let mut s = state_c.lock();
             if idx < s.displayed_entries.len() {
                 s.selected_idx = Some(idx);
                 let entry = &s.displayed_entries[idx];
-                let is_archive = ops::archive::ArchiveFormat::from_path(&entry.path).is_some();
+                let is_archive = !entry.is_dir && ops::archive::ArchiveFormat::from_path(&entry.path).is_some();
                 let selected_info = format!(
                     "{} ({} • {} • {})",
                     entry.name,
-                    format_bytes(entry.size),
+                    if entry.is_dir { "Folder".into() } else { format_bytes(entry.size) },
                     entry.permissions,
                     format_modified(entry.modified)
                 );
@@ -253,21 +276,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     {
-        let weak_c = weak.clone();
-        let state_c = state.clone();
+        let act = activate_entry.clone();
         window.on_entry_double_clicked(move |index| {
-            let idx = index as usize;
-            let entry_opt = {
-                let s = state_c.lock();
-                s.displayed_entries.get(idx).cloned()
-            };
-            if let Some(entry) = entry_opt {
-                if entry.is_dir {
-                    navigate_to(weak_c.clone(), state_c.clone(), entry.path, true);
-                } else {
-                    log::info!("Opening file: {}", entry.path.display());
-                    let _ = open::that(&entry.path);
-                }
+            if index >= 0 {
+                act(index as usize);
             }
         });
     }
@@ -288,11 +300,11 @@ fn main() -> anyhow::Result<()> {
             };
             s.selected_idx = Some(new_idx);
             let entry = &s.displayed_entries[new_idx];
-            let is_archive = ops::archive::ArchiveFormat::from_path(&entry.path).is_some();
+            let is_archive = !entry.is_dir && ops::archive::ArchiveFormat::from_path(&entry.path).is_some();
             let selected_info = format!(
                 "{} ({} • {} • {})",
                 entry.name,
-                format_bytes(entry.size),
+                if entry.is_dir { "Folder".into() } else { format_bytes(entry.size) },
                 entry.permissions,
                 format_modified(entry.modified)
             );
@@ -319,11 +331,11 @@ fn main() -> anyhow::Result<()> {
             };
             s.selected_idx = Some(new_idx);
             let entry = &s.displayed_entries[new_idx];
-            let is_archive = ops::archive::ArchiveFormat::from_path(&entry.path).is_some();
+            let is_archive = !entry.is_dir && ops::archive::ArchiveFormat::from_path(&entry.path).is_some();
             let selected_info = format!(
                 "{} ({} • {} • {})",
                 entry.name,
-                format_bytes(entry.size),
+                if entry.is_dir { "Folder".into() } else { format_bytes(entry.size) },
                 entry.permissions,
                 format_modified(entry.modified)
             );
@@ -336,19 +348,21 @@ fn main() -> anyhow::Result<()> {
     }
 
     {
-        let weak_c = weak.clone();
+        let act = activate_entry.clone();
         let state_c = state.clone();
         window.on_activate_selected(move || {
-            let entry_opt = {
-                let s = state_c.lock();
-                s.selected_idx.and_then(|i| s.displayed_entries.get(i).cloned())
-            };
-            if let Some(entry) = entry_opt {
-                if entry.is_dir {
-                    navigate_to(weak_c.clone(), state_c.clone(), entry.path, true);
-                } else {
-                    let _ = open::that(&entry.path);
-                }
+            if let Some(idx) = state_c.lock().selected_idx {
+                act(idx);
+            }
+        });
+    }
+
+    {
+        let act = activate_entry.clone();
+        let state_c = state.clone();
+        window.on_activate_first(move || {
+            if !state_c.lock().displayed_entries.is_empty() {
+                act(0);
             }
         });
     }
@@ -588,7 +602,7 @@ fn main() -> anyhow::Result<()> {
                 match res {
                     Ok(_) => {
                         if let Some(w) = weak_c.upgrade() {
-                            w.set_selected_info(format!("Deleted permanently: {}", entry.name).into());
+                            w.set_selected_info(format!("Deleted: {}", entry.name).into());
                         }
                         reload_directory(weak_c.clone(), state_c.clone(), current_dir);
                     }
@@ -770,7 +784,7 @@ fn main() -> anyhow::Result<()> {
                 let type_str = if entry.is_dir {
                     "Directory".to_string()
                 } else {
-                    format!("{:?} (.{:?})", entry.category, entry.extension)
+                    format!("{:?} (.{})", entry.category, entry.extension)
                 };
 
                 let size_str = if entry.is_dir {
@@ -884,7 +898,19 @@ fn main() -> anyhow::Result<()> {
             if let Some(clip) = clipboard_item {
                 for src in &clip.paths {
                     if let Some(file_name) = src.file_name() {
-                        let dest = current_dir.join(file_name);
+                        let mut dest = current_dir.join(file_name);
+                        // If same destination in Copy mode, generate " (copy)"
+                        if clip.mode == ClipboardMode::Copy && dest.exists() {
+                            let stem = src.file_stem().unwrap_or_default().to_string_lossy();
+                            let ext = src.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+                            let mut counter = 1;
+                            dest = current_dir.join(format!("{} (copy){}", stem, ext));
+                            while dest.exists() {
+                                counter += 1;
+                                dest = current_dir.join(format!("{} (copy {}){}", stem, counter, ext));
+                            }
+                        }
+
                         match clip.mode {
                             ClipboardMode::Copy => {
                                 if src.is_dir() {
@@ -960,7 +986,6 @@ fn navigate_to(
     let (cancel_token, show_hidden, sort_by, sort_dir) = {
         let mut s = state.lock();
 
-        // Signal in-flight scan to cancel
         s.cancel_token.store(true, Ordering::Relaxed);
         let new_token = Arc::new(AtomicBool::new(false));
         s.cancel_token = new_token.clone();
@@ -983,6 +1008,7 @@ fn navigate_to(
     // Update UI headers immediately
     if let Some(w) = weak.upgrade() {
         w.set_current_path(collapse_home(&dir).into());
+        w.set_raw_current_path(dir.display().to_string().into());
         w.set_item_count("Loading…".into());
         w.set_selected_index(-1);
         w.set_is_selected_archive(false);
@@ -994,10 +1020,43 @@ fn navigate_to(
         }
     }
 
-    // ── Setup Real-Time inotify Watcher (Guarded) ────────────────────────────
+    // Setup Real-Time inotify Watcher
     setup_watcher(&dir, weak.clone(), state.clone());
 
-    // ── Background Directory Scan Pipeline ───────────────────────────────────
+    // Background Directory Scan Pipeline
+    scan_and_render(weak, state, dir, show_hidden, sort_by, sort_dir, cancel_token);
+}
+
+/// Reload current directory without resetting history or recreating the inotify watcher
+fn reload_directory(
+    weak: slint::Weak<MainWindow>,
+    state: Arc<Mutex<AppState>>,
+    dir: PathBuf,
+) {
+    let (cancel_token, show_hidden, sort_by, sort_dir) = {
+        let mut s = state.lock();
+        if s.current_dir != dir {
+            return;
+        }
+        s.cancel_token.store(true, Ordering::Relaxed);
+        let new_token = Arc::new(AtomicBool::new(false));
+        s.cancel_token = new_token.clone();
+        (new_token, s.show_hidden, s.sort_by, s.sort_dir)
+    };
+
+    scan_and_render(weak, state, dir, show_hidden, sort_by, sort_dir, cancel_token);
+}
+
+/// Core scanner and renderer used by both navigation and inotify reloads
+fn scan_and_render(
+    weak: slint::Weak<MainWindow>,
+    state: Arc<Mutex<AppState>>,
+    dir: PathBuf,
+    show_hidden: bool,
+    sort_by: SortBy,
+    sort_dir: SortDir,
+    cancel_token: Arc<AtomicBool>,
+) {
     let dir_scan = dir.clone();
     let state_scan = state.clone();
     let weak_scan = weak.clone();
@@ -1032,9 +1091,16 @@ fn navigate_to(
                     };
                     s.displayed_entries = displayed.clone();
 
+                    let folders_count = s.displayed_entries.iter().filter(|e| e.is_dir).count();
+                    let files_count = s.displayed_entries.len().saturating_sub(folders_count);
+
                     let ui_rows = entries_to_slint(&displayed);
                     let count_str: SharedString = if query.trim().is_empty() {
-                        format!("{} item{}", total, if total == 1 { "" } else { "s" }).into()
+                        format!("{} item{} ({} folder{}, {} file{})",
+                            total, if total == 1 { "" } else { "s" },
+                            folders_count, if folders_count == 1 { "" } else { "s" },
+                            files_count, if files_count == 1 { "" } else { "s" }
+                        ).into()
                     } else {
                         format!("{} of {} item{}", displayed.len(), total, if total == 1 { "" } else { "s" }).into()
                     };
@@ -1062,7 +1128,6 @@ fn navigate_to(
                                     }
                                 });
 
-                                // Apply git status tags to displayed entries
                                 let mut s = state_git.lock();
                                 if s.current_dir == dir_git {
                                     for entry in &mut s.displayed_entries {
@@ -1100,80 +1165,6 @@ fn navigate_to(
     });
 }
 
-/// Reload current directory without resetting history or recreating the inotify watcher
-fn reload_directory(
-    weak: slint::Weak<MainWindow>,
-    state: Arc<Mutex<AppState>>,
-    dir: PathBuf,
-) {
-    let (cancel_token, show_hidden, sort_by, sort_dir) = {
-        let mut s = state.lock();
-        if s.current_dir != dir {
-            return;
-        }
-        s.cancel_token.store(true, Ordering::Relaxed);
-        let new_token = Arc::new(AtomicBool::new(false));
-        s.cancel_token = new_token.clone();
-        (new_token, s.show_hidden, s.sort_by, s.sort_dir)
-    };
-
-    let dir_scan = dir.clone();
-    let state_scan = state.clone();
-    let weak_scan = weak.clone();
-
-    std::thread::spawn(move || {
-        let config = ScanConfig {
-            show_hidden,
-            sort_by,
-            sort_dir,
-            ..ScanConfig::default()
-        };
-        let rx = scan_directory(dir_scan.clone(), config, cancel_token);
-        let mut collected: Vec<FileEntry> = Vec::new();
-
-        loop {
-            match rx.recv() {
-                Ok(ScanEvent::Entries(batch)) => {
-                    collected.extend(batch);
-                }
-                Ok(ScanEvent::Done { total }) => {
-                    let mut s = state_scan.lock();
-                    if s.current_dir != dir_scan {
-                        return;
-                    }
-                    s.all_entries = collected.clone();
-
-                    let query = s.filter_query.clone();
-                    let displayed = if query.trim().is_empty() {
-                        collected
-                    } else {
-                        core::filter::fuzzy_filter(&collected, &query)
-                    };
-                    s.displayed_entries = displayed.clone();
-
-                    let ui_rows = entries_to_slint(&displayed);
-                    let count_str: SharedString = if query.trim().is_empty() {
-                        format!("{} item{}", total, if total == 1 { "" } else { "s" }).into()
-                    } else {
-                        format!("{} of {} item{}", displayed.len(), total, if total == 1 { "" } else { "s" }).into()
-                    };
-
-                    let w_ref = weak_scan.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = w_ref.upgrade() {
-                            w.set_item_count(count_str);
-                            w.set_entries(ModelRc::new(VecModel::from(ui_rows)));
-                        }
-                    });
-                    break;
-                }
-                Ok(ScanEvent::Error(_)) => break,
-                Err(_) => break,
-            }
-        }
-    });
-}
-
 /// Setup real-time watcher on a directory with strict debouncing and recursion guards
 fn setup_watcher(
     dir: &Path,
@@ -1183,11 +1174,10 @@ fn setup_watcher(
     let mut s = state.lock();
     if let Some(ref handle) = s.watcher {
         if handle.dir == dir {
-            return; // Already watching this directory
+            return;
         }
     }
 
-    // Drop old watcher
     s.watcher = None;
 
     match watch_directory(dir) {
@@ -1301,6 +1291,15 @@ fn build_places() -> Vec<PlaceData> {
                 icon: "💻".into(),
             });
         }
+
+        let dotfiles = h.join("dotfiles");
+        if dotfiles.is_dir() {
+            places.push(PlaceData {
+                name: "Dotfiles".into(),
+                path: dotfiles.display().to_string().into(),
+                icon: "⚙️".into(),
+            });
+        }
     }
 
     if let Some(p) = dirs_next::desktop_dir() {
@@ -1363,7 +1362,7 @@ fn build_places() -> Vec<PlaceData> {
                         if path.is_dir() {
                             let name = entry.file_name().to_string_lossy().into_owned();
                             places.push(PlaceData {
-                                name: name.into(),
+                                name: format!("Drive: {}", name).into(),
                                 path: path.display().to_string().into(),
                                 icon: "💽".into(),
                             });
