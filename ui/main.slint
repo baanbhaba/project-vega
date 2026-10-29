@@ -26,20 +26,25 @@ export struct EntryData {
 global Palette {
     // Backgrounds
     out property <color> bg-base:      #0d0d0d;   // OLED black
-    out property <color> bg-surface:   #161616;   // Panel surface
-    out property <color> bg-elevated:  #1e1e1e;   // Elevated cards / modals
-    out property <color> bg-hover:     #252525;   // Item hover
-    out property <color> bg-selected:  #2f2d4a;   // Item selected (rich indigo tint)
+    out property <color> bg-surface:   #151515;   // Panel surface
+    out property <color> bg-elevated:  #1e1e20;   // Elevated cards / modals
+    out property <color> bg-hover:     #26262a;   // Item hover
+    out property <color> bg-selected:  #2f2d4e;   // Item selected (rich indigo tint)
 
     // Text
-    out property <color> text-primary:   #f0f0f0;
-    out property <color> text-secondary: #9a9a9a;
-    out property <color> text-dim:       #5a5a5a;
+    out property <color> text-primary:   #f2f2f2;
+    out property <color> text-secondary: #9e9ea6;
+    out property <color> text-dim:       #5e5e66;
 
     // Accent
     out property <color> accent:         #7c6af0;  // Purple-violet accent
-    out property <color> accent-dim:     #3d3578;
+    out property <color> accent-dim:     #352e64;
     out property <color> accent-hover:   #9282f5;
+
+    // Danger / Warning
+    out property <color> danger:         #f06161;
+    out property <color> warning:        #f0d261;
+    out property <color> success:        #61f070;
 
     // File category colors
     out property <color> cat-code:       #61d2f0;  // Cyan
@@ -60,19 +65,60 @@ global Palette {
     out property <color> git-conflict:  #f06161;   // Red
 
     // Borders
-    out property <color> border:        #252525;
+    out property <color> border:        #232328;
     out property <color> border-focus:  #7c6af0;
 
     // Sizes
-    out property <length> sidebar-width: 210px;
+    out property <length> sidebar-width: 216px;
     out property <length> toolbar-height: 42px;
     out property <length> row-height: 30px;
     out property <length> radius: 6px;
 }
 
-// ── Reusable Components ──────────────────────────────────────────────────────
+// ── Context Menu Item ────────────────────────────────────────────────────────
+component ContextMenuItem inherits Rectangle {
+    in property <string> icon: "";
+    in property <string> text: "";
+    in property <string> shortcut: "";
+    in property <bool> is-danger: false;
+    callback clicked();
 
-// A single file row in the list view
+    height: 28px;
+    background: ta.has-hover ? (is-danger ? #4a1c1c : Palette.bg-hover) : transparent;
+    border-radius: 4px;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 8px;
+
+        Text {
+            text: root.icon;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.text;
+            color: root.is-danger ? Palette.danger : Palette.text-primary;
+            font-size: 12px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: root.shortcut;
+            color: Palette.text-dim;
+            font-size: 10px;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        width: 100%; height: 100%;
+        clicked => { root.clicked(); }
+    }
+}
+
+// ── Reusable File Row ────────────────────────────────────────────────────────
 component FileRow inherits Rectangle {
     in property <string>  name;
     in property <string>  icon: "📄";
@@ -86,6 +132,7 @@ component FileRow inherits Rectangle {
     in property <bool>    is-dir: false;
     callback clicked();
     callback double-clicked();
+    callback context-menu(length, length);
 
     height: Palette.row-height;
     background: selected ? Palette.bg-selected : (ta.has-hover ? Palette.bg-hover : transparent);
@@ -169,12 +216,44 @@ component FileRow inherits Rectangle {
         }
     }
 
-    // TouchArea covers full row on top of contents
     ta := TouchArea {
         width: 100%;
         height: 100%;
         clicked => { root.clicked(); }
         double-clicked => { root.double-clicked(); }
+        pointer-event(pe) => {
+            if pe.button == PointerEventButton.right && pe.kind == PointerEventKind.down {
+                root.clicked();
+                root.context-menu(self.mouse-x, self.mouse-y);
+            }
+        }
+    }
+}
+
+// ── Toolbar Button ───────────────────────────────────────────────────────────
+component ToolButton inherits Rectangle {
+    in property <string> text: "";
+    in property <string> tip: "";
+    in property <bool> active: false;
+    callback clicked();
+
+    width: 28px;
+    height: 28px;
+    background: active ? Palette.accent-dim : (ta.has-hover ? Palette.bg-hover : transparent);
+    border-radius: Palette.radius;
+
+    Text {
+        text: root.text;
+        font-size: 13px;
+        color: root.active ? Palette.accent : Palette.text-secondary;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+
+    ta := TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { root.clicked(); }
     }
 }
 
@@ -182,62 +261,48 @@ component FileRow inherits Rectangle {
 component Toolbar inherits Rectangle {
     in-out property <string> current-path: "/";
     in property <string> git-branch: "";
+    in property <bool> is-archive-selected: false;
+    in property <bool> has-clipboard: false;
     callback navigate-to(string);
     callback go-back();
     callback go-forward();
     callback go-up();
     callback toggle-hidden();
-    callback open-create-dialog();
+    callback open-create-folder-dialog();
+    callback open-create-file-dialog();
     callback open-rename-dialog();
+    callback copy-selected();
+    callback cut-selected();
+    callback paste-clipboard();
+    callback duplicate-selected();
+    callback archive-action();
+    callback show-properties();
     callback open-terminal();
     callback trash-selected();
     callback refresh();
+    callback show-help();
+    public function focus-path() { path-input.focus(); }
 
     height: Palette.toolbar-height;
     background: Palette.bg-surface;
 
     HorizontalLayout {
         padding: 6px;
-        spacing: 4px;
+        spacing: 3px;
 
-        // Back button
-        Rectangle {
-            width: 28px; height: 28px;
-            background: back-ta.has-hover ? Palette.bg-hover : transparent;
-            border-radius: Palette.radius;
-            Text { text: "◀"; font-size: 12px; color: Palette.text-secondary;
-                   vertical-alignment: center; horizontal-alignment: center; }
-            back-ta := TouchArea { width: 100%; height: 100%; clicked => { root.go-back(); } }
-        }
+        // Navigation controls
+        ToolButton { text: "◀"; clicked => { root.go-back(); } }
+        ToolButton { text: "▶"; clicked => { root.go-forward(); } }
+        ToolButton { text: "↑"; clicked => { root.go-up(); } }
 
-        // Forward button
-        Rectangle {
-            width: 28px; height: 28px;
-            background: fwd-ta.has-hover ? Palette.bg-hover : transparent;
-            border-radius: Palette.radius;
-            Text { text: "▶"; font-size: 12px; color: Palette.text-secondary;
-                   vertical-alignment: center; horizontal-alignment: center; }
-            fwd-ta := TouchArea { width: 100%; height: 100%; clicked => { root.go-forward(); } }
-        }
-
-        // Up button
-        Rectangle {
-            width: 28px; height: 28px;
-            background: up-ta.has-hover ? Palette.bg-hover : transparent;
-            border-radius: Palette.radius;
-            Text { text: "↑"; font-size: 14px; color: Palette.text-secondary;
-                   vertical-alignment: center; horizontal-alignment: center; }
-            up-ta := TouchArea { width: 100%; height: 100%; clicked => { root.go-up(); } }
-        }
-
-        // Path input
+        // Path address input
         Rectangle {
             horizontal-stretch: 1;
             height: 28px;
             background: Palette.bg-elevated;
             border-radius: Palette.radius;
             border-width: 1px;
-            border-color: Palette.border;
+            border-color: path-input.has-focus ? Palette.border-focus : Palette.border;
 
             path-input := TextInput {
                 x: 8px; y: 0;
@@ -266,83 +331,48 @@ component Toolbar inherits Rectangle {
             }
         }
 
-        // New folder button
-        Rectangle {
-            width: 32px; height: 28px;
-            background: newf-ta.has-hover ? Palette.bg-hover : transparent;
-            border-radius: Palette.radius;
-            Text { text: "📁+"; font-size: 12px; color: Palette.text-secondary;
-                   vertical-alignment: center; horizontal-alignment: center; }
-            newf-ta := TouchArea { width: 100%; height: 100%; clicked => { root.open-create-dialog(); } }
+        // Action Buttons
+        ToolButton { text: "📁+"; clicked => { root.open-create-folder-dialog(); } }
+        ToolButton { text: "📄+"; clicked => { root.open-create-file-dialog(); } }
+        ToolButton { text: "✏️"; clicked => { root.open-rename-dialog(); } }
+        ToolButton { text: "📋"; clicked => { root.copy-selected(); } }
+        ToolButton { text: "✂️"; clicked => { root.cut-selected(); } }
+        ToolButton {
+            text: "📥";
+            active: root.has-clipboard;
+            clicked => { root.paste-clipboard(); }
         }
-
-        // Rename button
-        Rectangle {
-            width: 28px; height: 28px;
-            background: ren-ta.has-hover ? Palette.bg-hover : transparent;
-            border-radius: Palette.radius;
-            Text { text: "✏️"; font-size: 12px; color: Palette.text-secondary;
-                   vertical-alignment: center; horizontal-alignment: center; }
-            ren-ta := TouchArea { width: 100%; height: 100%; clicked => { root.open-rename-dialog(); } }
+        ToolButton { text: "📄📄"; clicked => { root.duplicate-selected(); } }
+        ToolButton {
+            text: root.is-archive-selected ? "📦↓" : "📦+";
+            clicked => { root.archive-action(); }
         }
-
-        // Open terminal button
-        Rectangle {
-            width: 30px; height: 28px;
-            background: term-ta.has-hover ? Palette.bg-hover : transparent;
-            border-radius: Palette.radius;
-            Text { text: "💻"; font-size: 12px; color: Palette.text-secondary;
-                   vertical-alignment: center; horizontal-alignment: center; }
-            term-ta := TouchArea { width: 100%; height: 100%; clicked => { root.open-terminal(); } }
-        }
-
-        // Trash selected button
-        Rectangle {
-            width: 28px; height: 28px;
-            background: trash-ta.has-hover ? Palette.bg-hover : transparent;
-            border-radius: Palette.radius;
-            Text { text: "🗑"; font-size: 12px; color: Palette.text-secondary;
-                   vertical-alignment: center; horizontal-alignment: center; }
-            trash-ta := TouchArea { width: 100%; height: 100%; clicked => { root.trash-selected(); } }
-        }
-
-        // Show/hide hidden files toggle
-        Rectangle {
-            width: 28px; height: 28px;
-            background: hidden-ta.has-hover ? Palette.bg-hover : transparent;
-            border-radius: Palette.radius;
-            Text { text: "👁"; font-size: 12px; color: Palette.text-secondary;
-                   vertical-alignment: center; horizontal-alignment: center; }
-            hidden-ta := TouchArea { width: 100%; height: 100%; clicked => { root.toggle-hidden(); } }
-        }
-
-        // Refresh button
-        Rectangle {
-            width: 28px; height: 28px;
-            background: ref-ta.has-hover ? Palette.bg-hover : transparent;
-            border-radius: Palette.radius;
-            Text { text: "🔄"; font-size: 11px; color: Palette.text-secondary;
-                   vertical-alignment: center; horizontal-alignment: center; }
-            ref-ta := TouchArea { width: 100%; height: 100%; clicked => { root.refresh(); } }
-        }
+        ToolButton { text: "ℹ️"; clicked => { root.show-properties(); } }
+        ToolButton { text: "💻"; clicked => { root.open-terminal(); } }
+        ToolButton { text: "🗑"; clicked => { root.trash-selected(); } }
+        ToolButton { text: "👁"; clicked => { root.toggle-hidden(); } }
+        ToolButton { text: "🔄"; clicked => { root.refresh(); } }
+        ToolButton { text: "❓"; clicked => { root.show-help(); } }
     }
 }
 
 // ── Sidebar ──────────────────────────────────────────────────────────────────
 component Sidebar inherits Rectangle {
     in property <[PlaceData]> places: [];
+    in property <string> active-path: "";
     callback navigate-to(string);
     callback filter-changed(string);
+    public function focus-filter() { filter-input.focus(); }
 
     width: Palette.sidebar-width;
     background: Palette.bg-surface;
 
     VerticalLayout {
         padding: 8px;
-        spacing: 3px;
+        spacing: 2px;
 
         Text {
-            text: "PLACES";
+            text: "PLACES & DRIVES";
             color: Palette.text-dim;
             font-size: 10px;
             font-weight: 700;
@@ -352,13 +382,13 @@ component Sidebar inherits Rectangle {
         }
 
         for place in places : Rectangle {
-            height: 30px;
-            background: place-ta.has-hover ? Palette.bg-hover : transparent;
+            height: 28px;
+            background: place.path == root.active-path ? Palette.bg-selected : (place-ta.has-hover ? Palette.bg-hover : transparent);
             border-radius: Palette.radius;
 
             HorizontalLayout {
-                padding-left: 10px;
-                padding-right: 10px;
+                padding-left: 8px;
+                padding-right: 8px;
                 spacing: 8px;
 
                 Text {
@@ -368,8 +398,9 @@ component Sidebar inherits Rectangle {
                 }
                 Text {
                     text: place.name;
-                    color: Palette.text-secondary;
-                    font-size: 13px;
+                    color: place.path == root.active-path ? Palette.accent : Palette.text-secondary;
+                    font-size: 12px;
+                    font-weight: place.path == root.active-path ? 700 : 400;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                     overflow: elide;
@@ -400,16 +431,41 @@ component Sidebar inherits Rectangle {
             background: Palette.bg-elevated;
             border-radius: Palette.radius;
             border-width: 1px;
-            border-color: Palette.border;
+            border-color: filter-input.has-focus ? Palette.border-focus : Palette.border;
 
-            filter-input := TextInput {
-                x: 8px; y: 0;
-                width: parent.width - 16px;
-                height: parent.height;
-                color: Palette.text-primary;
-                font-size: 12px;
-                vertical-alignment: center;
-                edited => { root.filter-changed(self.text); }
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 6px;
+
+                filter-input := TextInput {
+                    horizontal-stretch: 1;
+                    height: parent.height;
+                    color: Palette.text-primary;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    edited => { root.filter-changed(self.text); }
+                }
+
+                if filter-input.text != "" : Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    background: clr-ta.has-hover ? Palette.bg-hover : transparent;
+                    border-radius: 9px;
+                    Text {
+                        text: "✕";
+                        font-size: 10px;
+                        color: Palette.text-dim;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                    clr-ta := TouchArea {
+                        width: 100%; height: 100%;
+                        clicked => {
+                            filter-input.text = "";
+                            root.filter-changed("");
+                        }
+                    }
+                }
             }
         }
 
@@ -465,13 +521,14 @@ export component MainWindow inherits Window {
     // ── Exposed properties ──────────────────────────────────────────────────
     in-out property <string> current-path: "/home";
     in property <string> git-branch: "";
-    in property <string> filter-text: "";
     in property <string> item-count: "0 items";
     in property <string> selected-info: "";
     in property <string> disk-info: "";
     in-out property <int> selected-index: -1;
     in property <string> sort-column: "name";
     in property <string> sort-direction: "asc";
+    in property <bool> is-selected-archive: false;
+    in property <bool> has-clipboard: false;
     in property <[PlaceData]> places: [];
     in property <[EntryData]> entries: [];
 
@@ -480,6 +537,24 @@ export component MainWindow inherits Window {
     in-out property <string> dialog-title: "New Folder";
     in-out property <string> dialog-value: "";
     in-out property <string> dialog-action: "new_folder";
+
+    // ── Properties Inspector State ──────────────────────────────────────────
+    in-out property <bool> props-visible: false;
+    in property <string> props-name: "";
+    in property <string> props-path: "";
+    in property <string> props-type: "";
+    in property <string> props-size: "";
+    in property <string> props-modified: "";
+    in property <string> props-permissions: "";
+    in property <string> props-checksum: "";
+
+    // ── Help Dialog State ───────────────────────────────────────────────────
+    in-out property <bool> help-visible: false;
+
+    // ── Floating Context Menu State ─────────────────────────────────────────
+    in-out property <bool> ctx-visible: false;
+    in-out property <length> ctx-x: 300px;
+    in-out property <length> ctx-y: 100px;
 
     // ── Callbacks ───────────────────────────────────────────────────────────
     callback navigate-to(string);
@@ -491,9 +566,11 @@ export component MainWindow inherits Window {
     callback entry-double-clicked(int);
     callback filter-changed(string);
     callback create-folder(string);
+    callback create-file(string);
     callback rename-item(string);
     callback open-terminal();
     callback trash-selected();
+    callback permanent-delete();
     callback refresh();
     callback select-prev();
     callback select-next();
@@ -502,6 +579,12 @@ export component MainWindow inherits Window {
     callback copy-selected();
     callback cut-selected();
     callback paste-clipboard();
+    callback duplicate-selected();
+    callback copy-path();
+    callback extract-archive();
+    callback compress-selected();
+    callback show-properties();
+    callback compute-checksum();
 
     // ── Keyboard handling ───────────────────────────────────────────────────
     forward-focus: fs;
@@ -524,6 +607,27 @@ export component MainWindow inherits Window {
                 root.go-up();
                 return accept;
             }
+            if event.text == Key.Escape {
+                root.dialog-visible = false;
+                root.props-visible = false;
+                root.help-visible = false;
+                root.ctx-visible = false;
+                return accept;
+            }
+            if event.text == Key.F1 || event.text == "?" {
+                root.help-visible = !root.help-visible;
+                return accept;
+            }
+            if event.text == Key.F2 {
+                root.dialog-title = "Rename Item";
+                root.dialog-action = "rename";
+                root.dialog-visible = true;
+                return accept;
+            }
+            if event.text == Key.F5 {
+                root.refresh();
+                return accept;
+            }
             if event.modifiers.control && (event.text == "h" || event.text == "H") {
                 root.toggle-hidden();
                 return accept;
@@ -533,7 +637,11 @@ export component MainWindow inherits Window {
                 return accept;
             }
             if event.modifiers.control && (event.text == "c" || event.text == "C") {
-                root.copy-selected();
+                if event.modifiers.shift {
+                    root.copy-path();
+                } else {
+                    root.copy-selected();
+                }
                 return accept;
             }
             if event.modifiers.control && (event.text == "x" || event.text == "X") {
@@ -544,18 +652,46 @@ export component MainWindow inherits Window {
                 root.paste-clipboard();
                 return accept;
             }
+            if event.modifiers.control && (event.text == "d" || event.text == "D") {
+                root.duplicate-selected();
+                return accept;
+            }
+            if event.modifiers.control && (event.text == "i" || event.text == "I") {
+                root.show-properties();
+                return accept;
+            }
             if event.modifiers.control && (event.text == "t" || event.text == "T") {
                 root.open-terminal();
                 return accept;
             }
-            if event.text == Key.Delete {
-                root.trash-selected();
+            if event.modifiers.control && (event.text == "l" || event.text == "L") {
+                tb.focus-path();
                 return accept;
             }
-            if event.text == Key.F2 {
-                root.dialog-title = "Rename Item";
-                root.dialog-action = "rename";
-                root.dialog-visible = true;
+            if event.modifiers.control && (event.text == "f" || event.text == "F") {
+                sb.focus-filter();
+                return accept;
+            }
+            if event.modifiers.control && (event.text == "n" || event.text == "N") {
+                if event.modifiers.shift {
+                    root.dialog-title = "Create New Folder";
+                    root.dialog-value = "New Folder";
+                    root.dialog-action = "new_folder";
+                    root.dialog-visible = true;
+                } else {
+                    root.dialog-title = "Create New File";
+                    root.dialog-value = "new_file.txt";
+                    root.dialog-action = "new_file";
+                    root.dialog-visible = true;
+                }
+                return accept;
+            }
+            if event.text == Key.Delete {
+                if event.modifiers.shift {
+                    root.permanent-delete();
+                } else {
+                    root.trash-selected();
+                }
                 return accept;
             }
             reject
@@ -566,18 +702,26 @@ export component MainWindow inherits Window {
             spacing: 0px;
 
             // Toolbar
-            Toolbar {
+            tb := Toolbar {
                 current-path <=> root.current-path;
                 git-branch: root.git-branch;
+                is-archive-selected: root.is-selected-archive;
+                has-clipboard: root.has-clipboard;
                 navigate-to(p) => { root.navigate-to(p); }
                 go-back => { root.go-back(); }
                 go-forward => { root.go-forward(); }
                 go-up => { root.go-up(); }
                 toggle-hidden => { root.toggle-hidden(); }
-                open-create-dialog => {
+                open-create-folder-dialog => {
                     root.dialog-title = "Create New Folder";
                     root.dialog-value = "New Folder";
                     root.dialog-action = "new_folder";
+                    root.dialog-visible = true;
+                }
+                open-create-file-dialog => {
+                    root.dialog-title = "Create New File";
+                    root.dialog-value = "new_file.txt";
+                    root.dialog-action = "new_file";
                     root.dialog-visible = true;
                 }
                 open-rename-dialog => {
@@ -585,9 +729,22 @@ export component MainWindow inherits Window {
                     root.dialog-action = "rename";
                     root.dialog-visible = true;
                 }
+                copy-selected => { root.copy-selected(); }
+                cut-selected => { root.cut-selected(); }
+                paste-clipboard => { root.paste-clipboard(); }
+                duplicate-selected => { root.duplicate-selected(); }
+                archive-action => {
+                    if root.is-selected-archive {
+                        root.extract-archive();
+                    } else {
+                        root.compress-selected();
+                    }
+                }
+                show-properties => { root.show-properties(); }
                 open-terminal => { root.open-terminal(); }
                 trash-selected => { root.trash-selected(); }
                 refresh => { root.refresh(); }
+                show-help => { root.help-visible = true; }
             }
 
             // Column header bar
@@ -677,8 +834,9 @@ export component MainWindow inherits Window {
                 spacing: 0px;
 
                 // Sidebar
-                Sidebar {
+                sb := Sidebar {
                     places: root.places;
+                    active-path: root.current-path;
                     navigate-to(p) => { root.navigate-to(p); }
                     filter-changed(q) => { root.filter-changed(q); }
                 }
@@ -686,7 +844,7 @@ export component MainWindow inherits Window {
                 // Vertical divider
                 Rectangle { width: 1px; background: Palette.border; }
 
-                // File list with ListView (smooth scrolling and fast virtualization)
+                // File list with ListView
                 ListView {
                     horizontal-stretch: 1;
 
@@ -708,6 +866,11 @@ export component MainWindow inherits Window {
                         double-clicked => {
                             root.entry-double-clicked(i);
                         }
+                        context-menu(mx, my) => {
+                            root.ctx-x = root.width / 2;
+                            root.ctx-y = root.height / 3;
+                            root.ctx-visible = true;
+                        }
                     }
                 }
             }
@@ -721,14 +884,107 @@ export component MainWindow inherits Window {
         }
     }
 
-    // ── Modal Dialog Overlay (New Folder / Rename) ──────────────────────────
+    // ── Floating Context Menu Overlay ────────────────────────────────────────
+    if ctx-visible : Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000040;
+
+        TouchArea {
+            clicked => { root.ctx-visible = false; }
+        }
+
+        Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: 220px;
+            background: Palette.bg-elevated;
+            border-radius: Palette.radius * 1.5;
+            border-width: 1px;
+            border-color: Palette.border-focus;
+
+            VerticalLayout {
+                padding: 6px;
+                spacing: 2px;
+
+                ContextMenuItem {
+                    icon: "📂"; text: "Open"; shortcut: "Enter";
+                    clicked => { root.ctx-visible = false; root.activate-selected(); }
+                }
+                ContextMenuItem {
+                    icon: "✏️"; text: "Rename"; shortcut: "F2";
+                    clicked => {
+                        root.ctx-visible = false;
+                        root.dialog-title = "Rename Item";
+                        root.dialog-action = "rename";
+                        root.dialog-visible = true;
+                    }
+                }
+                ContextMenuItem {
+                    icon: "📋"; text: "Copy"; shortcut: "Ctrl+C";
+                    clicked => { root.ctx-visible = false; root.copy-selected(); }
+                }
+                ContextMenuItem {
+                    icon: "✂️"; text: "Cut"; shortcut: "Ctrl+X";
+                    clicked => { root.ctx-visible = false; root.cut-selected(); }
+                }
+                ContextMenuItem {
+                    icon: "📥"; text: "Paste"; shortcut: "Ctrl+V";
+                    clicked => { root.ctx-visible = false; root.paste-clipboard(); }
+                }
+                ContextMenuItem {
+                    icon: "📄"; text: "Duplicate"; shortcut: "Ctrl+D";
+                    clicked => { root.ctx-visible = false; root.duplicate-selected(); }
+                }
+                ContextMenuItem {
+                    icon: "🔗"; text: "Copy Path"; shortcut: "Ctrl+Shift+C";
+                    clicked => { root.ctx-visible = false; root.copy-path(); }
+                }
+
+                Rectangle { height: 1px; background: Palette.border; }
+
+                ContextMenuItem {
+                    icon: root.is-selected-archive ? "📦" : "📦+";
+                    text: root.is-selected-archive ? "Extract Archive" : "Compress to ZIP";
+                    clicked => {
+                        root.ctx-visible = false;
+                        if root.is-selected-archive {
+                            root.extract-archive();
+                        } else {
+                            root.compress-selected();
+                        }
+                    }
+                }
+                ContextMenuItem {
+                    icon: "💻"; text: "Terminal Here"; shortcut: "Ctrl+T";
+                    clicked => { root.ctx-visible = false; root.open-terminal(); }
+                }
+                ContextMenuItem {
+                    icon: "ℹ️"; text: "Properties"; shortcut: "Ctrl+I";
+                    clicked => { root.ctx-visible = false; root.show-properties(); }
+                }
+
+                Rectangle { height: 1px; background: Palette.border; }
+
+                ContextMenuItem {
+                    icon: "🗑"; text: "Move to Trash"; shortcut: "Del"; is-danger: true;
+                    clicked => { root.ctx-visible = false; root.trash-selected(); }
+                }
+                ContextMenuItem {
+                    icon: "⚠️"; text: "Delete Permanently"; shortcut: "Shift+Del"; is-danger: true;
+                    clicked => { root.ctx-visible = false; root.permanent-delete(); }
+                }
+            }
+        }
+    }
+
+    // ── Modal Dialog Overlay (New Folder / New File / Rename) ─────────────────
     if dialog-visible : Rectangle {
         width: 100%;
         height: 100%;
         background: #000000a0;
 
         TouchArea {
-            // Dismiss dialog when clicking the shaded backdrop
             clicked => { root.dialog-visible = false; }
         }
 
@@ -771,6 +1027,8 @@ export component MainWindow inherits Window {
                         accepted => {
                             if root.dialog-action == "new_folder" {
                                 root.create-folder(self.text);
+                            } else if root.dialog-action == "new_file" {
+                                root.create-file(self.text);
                             } else {
                                 root.rename-item(self.text);
                             }
@@ -817,11 +1075,192 @@ export component MainWindow inherits Window {
                             clicked => {
                                 if root.dialog-action == "new_folder" {
                                     root.create-folder(modal-input.text);
+                                } else if root.dialog-action == "new_file" {
+                                    root.create-file(modal-input.text);
                                 } else {
                                     root.rename-item(modal-input.text);
                                 }
                                 root.dialog-visible = false;
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Properties Inspector Modal ──────────────────────────────────────────
+    if props-visible : Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000a0;
+
+        TouchArea {
+            clicked => { root.props-visible = false; }
+        }
+
+        Rectangle {
+            width: 480px;
+            background: Palette.bg-elevated;
+            border-radius: Palette.radius * 2;
+            border-width: 1px;
+            border-color: Palette.border-focus;
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+
+            VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+
+                Text {
+                    text: "Properties: " + root.props-name;
+                    color: Palette.text-primary;
+                    font-size: 15px;
+                    font-weight: 700;
+                }
+
+                Rectangle { height: 1px; background: Palette.border; }
+
+                // Info Rows
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Path:"; color: Palette.text-dim; width: 90px; font-size: 12px; }
+                    Text { text: root.props-path; color: Palette.text-primary; font-size: 12px; horizontal-stretch: 1; overflow: elide; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Type:"; color: Palette.text-dim; width: 90px; font-size: 12px; }
+                    Text { text: root.props-type; color: Palette.text-primary; font-size: 12px; horizontal-stretch: 1; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Size:"; color: Palette.text-dim; width: 90px; font-size: 12px; }
+                    Text { text: root.props-size; color: Palette.text-primary; font-size: 12px; horizontal-stretch: 1; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Modified:"; color: Palette.text-dim; width: 90px; font-size: 12px; }
+                    Text { text: root.props-modified; color: Palette.text-primary; font-size: 12px; horizontal-stretch: 1; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Perms:"; color: Palette.text-dim; width: 90px; font-size: 12px; }
+                    Text { text: root.props-permissions; color: Palette.text-primary; font-family: "monospace"; font-size: 12px; horizontal-stretch: 1; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "BLAKE3:"; color: Palette.text-dim; width: 90px; font-size: 12px; }
+                    Text { text: root.props-checksum; color: Palette.accent; font-family: "monospace"; font-size: 11px; horizontal-stretch: 1; overflow: elide; }
+                    Rectangle {
+                        width: 70px; height: 22px;
+                        background: cs-btn-ta.has-hover ? Palette.bg-hover : Palette.bg-surface;
+                        border-radius: 4px;
+                        Text { text: "Calculate"; font-size: 10px; color: Palette.text-secondary; vertical-alignment: center; horizontal-alignment: center; }
+                        cs-btn-ta := TouchArea {
+                            width: 100%; height: 100%;
+                            clicked => { root.compute-checksum(); }
+                        }
+                    }
+                }
+
+                Rectangle { height: 1px; background: Palette.border; }
+
+                HorizontalLayout {
+                    alignment: end;
+                    Rectangle {
+                        width: 80px; height: 30px;
+                        background: close-props-ta.has-hover ? Palette.accent-hover : Palette.accent;
+                        border-radius: Palette.radius;
+                        Text { text: "Close"; color: #ffffff; font-size: 12px; font-weight: 700; vertical-alignment: center; horizontal-alignment: center; }
+                        close-props-ta := TouchArea {
+                            width: 100%; height: 100%;
+                            clicked => { root.props-visible = false; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Keyboard Shortcuts Reference Modal ──────────────────────────────────
+    if help-visible : Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000a0;
+
+        TouchArea {
+            clicked => { root.help-visible = false; }
+        }
+
+        Rectangle {
+            width: 520px;
+            background: Palette.bg-elevated;
+            border-radius: Palette.radius * 2;
+            border-width: 1px;
+            border-color: Palette.border-focus;
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+
+            VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+
+                Text {
+                    text: "Keyboard Shortcuts";
+                    color: Palette.text-primary;
+                    font-size: 16px;
+                    font-weight: 700;
+                }
+
+                Rectangle { height: 1px; background: Palette.border; }
+
+                HorizontalLayout {
+                    spacing: 20px;
+
+                    // Left Column
+                    VerticalLayout {
+                        spacing: 6px;
+                        horizontal-stretch: 1;
+                        Text { text: "Navigation"; color: Palette.accent; font-size: 11px; font-weight: 700; }
+                        Text { text: "↑ / ↓  —  Move Selection"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "Enter  —  Open Folder / File"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "Backspace  —  Parent Folder"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "Ctrl + L  —  Address Bar"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "Ctrl + F  —  Filter Search"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "Ctrl + H  —  Toggle Hidden"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "Ctrl + R / F5  —  Refresh"; color: Palette.text-secondary; font-size: 12px; }
+                    }
+
+                    // Right Column
+                    VerticalLayout {
+                        spacing: 6px;
+                        horizontal-stretch: 1;
+                        Text { text: "File Operations"; color: Palette.accent; font-size: 11px; font-weight: 700; }
+                        Text { text: "Ctrl + N  —  New File"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "Ctrl + Shift + N  —  New Folder"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "F2  —  Rename Item"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "Ctrl + C / X / V  —  Copy / Cut / Paste"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "Ctrl + D  —  Duplicate Item"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "Ctrl + Shift + C  —  Copy Path"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "Delete  —  Move to Trash"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "Shift + Del  —  Permanent Delete"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "Ctrl + I  —  File Properties"; color: Palette.text-secondary; font-size: 12px; }
+                        Text { text: "Ctrl + T  —  Open Terminal"; color: Palette.text-secondary; font-size: 12px; }
+                    }
+                }
+
+                Rectangle { height: 1px; background: Palette.border; }
+
+                HorizontalLayout {
+                    alignment: end;
+                    Rectangle {
+                        width: 80px; height: 30px;
+                        background: close-help-ta.has-hover ? Palette.accent-hover : Palette.accent;
+                        border-radius: Palette.radius;
+                        Text { text: "Got It"; color: #ffffff; font-size: 12px; font-weight: 700; vertical-alignment: center; horizontal-alignment: center; }
+                        close-help-ta := TouchArea {
+                            width: 100%; height: 100%;
+                            clicked => { root.help-visible = false; }
                         }
                     }
                 }

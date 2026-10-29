@@ -136,7 +136,6 @@ fn main() -> anyhow::Result<()> {
             if let Some(dir) = target {
                 navigate_to(weak_c.clone(), state_c.clone(), dir, true);
             } else if let Some(w) = weak_c.upgrade() {
-                // Restore valid path
                 let current = state_c.lock().current_dir.clone();
                 w.set_current_path(collapse_home(&current).into());
                 w.set_selected_info("Directory does not exist".into());
@@ -236,6 +235,7 @@ fn main() -> anyhow::Result<()> {
             if idx < s.displayed_entries.len() {
                 s.selected_idx = Some(idx);
                 let entry = &s.displayed_entries[idx];
+                let is_archive = ops::archive::ArchiveFormat::from_path(&entry.path).is_some();
                 let selected_info = format!(
                     "{} ({} • {} • {})",
                     entry.name,
@@ -245,6 +245,7 @@ fn main() -> anyhow::Result<()> {
                 );
                 if let Some(w) = weak_c.upgrade() {
                     w.set_selected_index(idx as i32);
+                    w.set_is_selected_archive(is_archive);
                     w.set_selected_info(selected_info.into());
                 }
             }
@@ -287,6 +288,7 @@ fn main() -> anyhow::Result<()> {
             };
             s.selected_idx = Some(new_idx);
             let entry = &s.displayed_entries[new_idx];
+            let is_archive = ops::archive::ArchiveFormat::from_path(&entry.path).is_some();
             let selected_info = format!(
                 "{} ({} • {} • {})",
                 entry.name,
@@ -296,6 +298,7 @@ fn main() -> anyhow::Result<()> {
             );
             if let Some(w) = weak_c.upgrade() {
                 w.set_selected_index(new_idx as i32);
+                w.set_is_selected_archive(is_archive);
                 w.set_selected_info(selected_info.into());
             }
         });
@@ -316,6 +319,7 @@ fn main() -> anyhow::Result<()> {
             };
             s.selected_idx = Some(new_idx);
             let entry = &s.displayed_entries[new_idx];
+            let is_archive = ops::archive::ArchiveFormat::from_path(&entry.path).is_some();
             let selected_info = format!(
                 "{} ({} • {} • {})",
                 entry.name,
@@ -325,6 +329,7 @@ fn main() -> anyhow::Result<()> {
             );
             if let Some(w) = weak_c.upgrade() {
                 w.set_selected_index(new_idx as i32);
+                w.set_is_selected_archive(is_archive);
                 w.set_selected_info(selected_info.into());
             }
         });
@@ -448,7 +453,7 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
-    // ── Create Folder with Name ──────────────────────────────────────────────
+    // ── Create Folder with Custom Name ───────────────────────────────────────
     {
         let weak_c = weak.clone();
         let state_c = state.clone();
@@ -467,6 +472,33 @@ fn main() -> anyhow::Result<()> {
                 }
                 Err(e) => {
                     log::error!("Failed to create directory {}: {}", new_dir.display(), e);
+                    if let Some(w) = weak_c.upgrade() {
+                        w.set_selected_info(format!("Error: {}", e).into());
+                    }
+                }
+            }
+        });
+    }
+
+    // ── Create File with Custom Name ─────────────────────────────────────────
+    {
+        let weak_c = weak.clone();
+        let state_c = state.clone();
+        window.on_create_file(move |name_str| {
+            let name = name_str.as_str().trim();
+            if name.is_empty() {
+                return;
+            }
+            let dir = { state_c.lock().current_dir.clone() };
+            let new_file = dir.join(name);
+
+            match std::fs::File::create(&new_file) {
+                Ok(_) => {
+                    log::info!("Created file: {}", new_file.display());
+                    reload_directory(weak_c.clone(), state_c.clone(), dir);
+                }
+                Err(e) => {
+                    log::error!("Failed to create file {}: {}", new_file.display(), e);
                     if let Some(w) = weak_c.upgrade() {
                         w.set_selected_info(format!("Error: {}", e).into());
                     }
@@ -536,6 +568,265 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
+    // ── Permanent Delete ─────────────────────────────────────────────────────
+    {
+        let weak_c = weak.clone();
+        let state_c = state.clone();
+        window.on_permanent_delete(move || {
+            let (target_opt, current_dir) = {
+                let s = state_c.lock();
+                let target = s.selected_idx.and_then(|i| s.displayed_entries.get(i).cloned());
+                (target, s.current_dir.clone())
+            };
+
+            if let Some(entry) = target_opt {
+                let res = if entry.is_dir {
+                    std::fs::remove_dir_all(&entry.path)
+                } else {
+                    std::fs::remove_file(&entry.path)
+                };
+                match res {
+                    Ok(_) => {
+                        if let Some(w) = weak_c.upgrade() {
+                            w.set_selected_info(format!("Deleted permanently: {}", entry.name).into());
+                        }
+                        reload_directory(weak_c.clone(), state_c.clone(), current_dir);
+                    }
+                    Err(e) => {
+                        if let Some(w) = weak_c.upgrade() {
+                            w.set_selected_info(format!("Delete error: {}", e).into());
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // ── Duplicate Selected Item ──────────────────────────────────────────────
+    {
+        let weak_c = weak.clone();
+        let state_c = state.clone();
+        window.on_duplicate_selected(move || {
+            let (target_opt, current_dir) = {
+                let s = state_c.lock();
+                let target = s.selected_idx.and_then(|i| s.displayed_entries.get(i).cloned());
+                (target, s.current_dir.clone())
+            };
+
+            if let Some(entry) = target_opt {
+                let stem = entry.path.file_stem().unwrap_or_default().to_string_lossy();
+                let ext = entry.path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+                let mut counter = 1;
+                let mut new_path = current_dir.join(format!("{} (copy){}", stem, ext));
+                while new_path.exists() {
+                    counter += 1;
+                    new_path = current_dir.join(format!("{} (copy {}){}", stem, counter, ext));
+                }
+
+                if entry.is_dir {
+                    let cancel = Arc::new(AtomicBool::new(false));
+                    let _ = ops::fileops::copy_files(vec![entry.path], current_dir.clone(), cancel);
+                } else {
+                    let _ = std::fs::copy(&entry.path, &new_path);
+                }
+                reload_directory(weak_c.clone(), state_c.clone(), current_dir);
+            }
+        });
+    }
+
+    // ── Copy Path to System Clipboard (wl-copy / xclip) ──────────────────────
+    {
+        let weak_c = weak.clone();
+        let state_c = state.clone();
+        window.on_copy_path(move || {
+            let target_opt = {
+                let s = state_c.lock();
+                s.selected_idx.and_then(|i| s.displayed_entries.get(i).map(|e| e.path.display().to_string()))
+            };
+
+            if let Some(path_str) = target_opt {
+                copy_to_system_clipboard(&path_str);
+                if let Some(w) = weak_c.upgrade() {
+                    w.set_selected_info(format!("Copied path: {}", path_str).into());
+                }
+            }
+        });
+    }
+
+    // ── Archive: Extract Selected ────────────────────────────────────────────
+    {
+        let weak_c = weak.clone();
+        let state_c = state.clone();
+        window.on_extract_archive(move || {
+            let (target_opt, current_dir) = {
+                let s = state_c.lock();
+                let target = s.selected_idx.and_then(|i| s.displayed_entries.get(i).map(|e| e.path.clone()));
+                (target, s.current_dir.clone())
+            };
+
+            if let Some(src) = target_opt {
+                if let Some(fmt) = ops::archive::ArchiveFormat::from_path(&src) {
+                    let stem = src.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                    let clean_stem = stem.trim_end_matches(".tar").to_string();
+                    let dest = current_dir.join(&clean_stem);
+                    let weak_a = weak_c.clone();
+                    let state_a = state_c.clone();
+                    let dir_a = current_dir.clone();
+
+                    if let Some(w) = weak_c.upgrade() {
+                        w.set_selected_info("Extracting archive…".into());
+                    }
+
+                    std::thread::spawn(move || {
+                        match ops::archive::extract(&src, &dest, fmt, None) {
+                            Ok(_) => {
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    if let Some(w) = weak_a.upgrade() {
+                                        w.set_selected_info(format!("Extracted to {}", clean_stem).into());
+                                    }
+                                    reload_directory(weak_a, state_a, dir_a);
+                                });
+                            }
+                            Err(e) => {
+                                log::error!("Extraction error: {}", e);
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    if let Some(w) = weak_a.upgrade() {
+                                        w.set_selected_info(format!("Extract error: {}", e).into());
+                                    }
+                                });
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    // ── Archive: Compress Selected to ZIP ────────────────────────────────────
+    {
+        let weak_c = weak.clone();
+        let state_c = state.clone();
+        window.on_compress_selected(move || {
+            let (target_opt, current_dir) = {
+                let s = state_c.lock();
+                let target = s.selected_idx.and_then(|i| s.displayed_entries.get(i).cloned());
+                (target, s.current_dir.clone())
+            };
+
+            if let Some(entry) = target_opt {
+                let zip_name = format!("{}.zip", entry.name);
+                let dest = current_dir.join(&zip_name);
+                let weak_a = weak_c.clone();
+                let state_a = state_c.clone();
+                let dir_a = current_dir.clone();
+
+                if let Some(w) = weak_c.upgrade() {
+                    w.set_selected_info("Compressing to ZIP…".into());
+                }
+
+                std::thread::spawn(move || {
+                    match ops::archive::compress(vec![entry.path], &dest, ops::archive::ArchiveFormat::Zip, None) {
+                        Ok(_) => {
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak_a.upgrade() {
+                                    w.set_selected_info(format!("Created {}", zip_name).into());
+                                }
+                                reload_directory(weak_a, state_a, dir_a);
+                            });
+                        }
+                        Err(e) => {
+                            log::error!("Compression error: {}", e);
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak_a.upgrade() {
+                                    w.set_selected_info(format!("Compress error: {}", e).into());
+                                }
+                            });
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    // ── Show Properties Inspector ────────────────────────────────────────────
+    {
+        let weak_c = weak.clone();
+        let state_c = state.clone();
+        window.on_show_properties(move || {
+            let target_opt = {
+                let s = state_c.lock();
+                s.selected_idx.and_then(|i| s.displayed_entries.get(i).cloned())
+            };
+
+            if let Some(entry) = target_opt {
+                let symlink_str = if entry.is_symlink {
+                    std::fs::read_link(&entry.path)
+                        .map(|p| format!(" -> {}", p.display()))
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+
+                let type_str = if entry.is_dir {
+                    "Directory".to_string()
+                } else {
+                    format!("{:?} (.{:?})", entry.category, entry.extension)
+                };
+
+                let size_str = if entry.is_dir {
+                    "Directory".to_string()
+                } else {
+                    format!("{} ({} bytes)", format_bytes(entry.size), entry.size)
+                };
+
+                let mod_str = format_modified(entry.modified);
+                let full_path = format!("{}{}", entry.path.display(), symlink_str);
+
+                if let Some(w) = weak_c.upgrade() {
+                    w.set_props_name(entry.name.into());
+                    w.set_props_path(full_path.into());
+                    w.set_props_type(type_str.into());
+                    w.set_props_size(size_str.into());
+                    w.set_props_modified(mod_str.into());
+                    w.set_props_permissions(entry.permissions.into());
+                    w.set_props_checksum("Click Calculate to compute".into());
+                    w.set_props_visible(true);
+                }
+            }
+        });
+    }
+
+    // ── Compute BLAKE3 Checksum ──────────────────────────────────────────────
+    {
+        let weak_c = weak.clone();
+        let state_c = state.clone();
+        window.on_compute_checksum(move || {
+            let target_opt = {
+                let s = state_c.lock();
+                s.selected_idx.and_then(|i| s.displayed_entries.get(i).map(|e| e.path.clone()))
+            };
+
+            if let Some(path) = target_opt {
+                let weak_cs = weak_c.clone();
+                if let Some(w) = weak_c.upgrade() {
+                    w.set_props_checksum("Computing BLAKE3…".into());
+                }
+
+                std::thread::spawn(move || {
+                    let hash = ops::checksum::checksum_file(&path, ops::checksum::ChecksumAlg::Blake3)
+                        .unwrap_or_else(|e| format!("Error: {}", e));
+
+                    let hash_s: SharedString = hash.into();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_cs.upgrade() {
+                            w.set_props_checksum(hash_s);
+                        }
+                    });
+                });
+            }
+        });
+    }
+
     // ── Clipboard (Copy / Cut / Paste) ───────────────────────────────────────
     {
         let weak_c = weak.clone();
@@ -552,6 +843,7 @@ fn main() -> anyhow::Result<()> {
                 });
                 let info_s: SharedString = format!("Copied: {}", name).into();
                 if let Some(w) = weak_c.upgrade() {
+                    w.set_has_clipboard(true);
                     w.set_selected_info(info_s);
                 }
             }
@@ -573,6 +865,7 @@ fn main() -> anyhow::Result<()> {
                 });
                 let info_s: SharedString = format!("Cut: {}", name).into();
                 if let Some(w) = weak_c.upgrade() {
+                    w.set_has_clipboard(true);
                     w.set_selected_info(info_s);
                 }
             }
@@ -610,6 +903,9 @@ fn main() -> anyhow::Result<()> {
 
                 if clip.mode == ClipboardMode::Cut {
                     state_c.lock().clipboard = None;
+                    if let Some(w) = weak_c.upgrade() {
+                        w.set_has_clipboard(false);
+                    }
                 }
                 reload_directory(weak_c.clone(), state_c.clone(), current_dir);
             }
@@ -689,6 +985,7 @@ fn navigate_to(
         w.set_current_path(collapse_home(&dir).into());
         w.set_item_count("Loading…".into());
         w.set_selected_index(-1);
+        w.set_is_selected_archive(false);
         w.set_selected_info("".into());
         w.set_git_branch("".into());
 
@@ -908,7 +1205,6 @@ fn setup_watcher(
             std::thread::spawn(move || {
                 let mut last_event = Instant::now();
                 while let Ok(event) = rx.recv() {
-                    // Ignore data writes to prevent feedback loops; only react to structural changes
                     match event {
                         WatchEvent::Created(_) | WatchEvent::Removed(_) | WatchEvent::Renamed { .. } => {}
                         WatchEvent::Modified(_) => continue,
@@ -942,6 +1238,33 @@ fn setup_watcher(
     }
 }
 
+/// Copy string to the Wayland/X11 system clipboard using wl-copy / xclip
+fn copy_to_system_clipboard(text: &str) {
+    use std::io::Write;
+    let _ = std::process::Command::new("wl-copy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            child.wait()
+        })
+        .or_else(|_| {
+            std::process::Command::new("xclip")
+                .arg("-selection")
+                .arg("clipboard")
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .and_then(|mut child| {
+                    if let Some(mut stdin) = child.stdin.take() {
+                        let _ = stdin.write_all(text.as_bytes());
+                    }
+                    child.wait()
+                })
+        });
+}
+
 /// Query free and total disk space using libc statvfs
 fn get_disk_free(path: &Path) -> Option<String> {
     use std::ffi::CString;
@@ -958,7 +1281,7 @@ fn get_disk_free(path: &Path) -> Option<String> {
     }
 }
 
-/// Build sidebar places with intuitive icons
+/// Build sidebar places with intuitive icons, including mounted drives
 fn build_places() -> Vec<PlaceData> {
     let mut places = Vec::new();
     let home = dirs_next::home_dir();
@@ -1026,6 +1349,29 @@ fn build_places() -> Vec<PlaceData> {
             path: p.display().to_string().into(),
             icon: "🎬".into(),
         });
+    }
+
+    // Mounted removable drives in /run/media/$USER or /media/$USER
+    let user = std::env::var("USER").unwrap_or_default();
+    if !user.is_empty() {
+        for base in &[format!("/run/media/{}", user), format!("/media/{}", user)] {
+            let p = Path::new(base);
+            if p.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(p) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            let name = entry.file_name().to_string_lossy().into_owned();
+                            places.push(PlaceData {
+                                name: name.into(),
+                                path: path.display().to_string().into(),
+                                icon: "💽".into(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
     }
 
     if let Some(data) = dirs_next::data_local_dir() {
@@ -1113,7 +1459,7 @@ fn entries_to_slint(entries: &[FileEntry]) -> Vec<EntryData> {
         .map(|e| EntryData {
             name:        e.name.clone().into(),
             icon:        category_icon(&e.category, e.is_dir, e.is_symlink).into(),
-            size:        format_bytes(e.size).into(),
+            size:        if e.is_dir { "—".into() } else { format_bytes(e.size).into() },
             modified:    format_modified(e.modified).into(),
             permissions: e.permissions.clone().into(),
             git_label:   git_label(&e.git_status).into(),
