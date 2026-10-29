@@ -310,6 +310,7 @@ fn main() -> anyhow::Result<()> {
             );
             if let Some(w) = weak_c.upgrade() {
                 w.set_selected_index(new_idx as i32);
+                w.invoke_ensure_visible(new_idx as i32);
                 w.set_is_selected_archive(is_archive);
                 w.set_selected_info(selected_info.into());
             }
@@ -341,6 +342,7 @@ fn main() -> anyhow::Result<()> {
             );
             if let Some(w) = weak_c.upgrade() {
                 w.set_selected_index(new_idx as i32);
+                w.invoke_ensure_visible(new_idx as i32);
                 w.set_is_selected_archive(is_archive);
                 w.set_selected_info(selected_info.into());
             }

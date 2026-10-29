@@ -571,6 +571,16 @@ export component MainWindow inherits Window {
     callback show-properties();
     callback compute-checksum();
 
+    public function ensure-visible(idx: int) {
+        if idx < 0 { return; }
+        if idx * Palette.row-height + file-list.viewport-y < 0 {
+            file-list.viewport-y = min(0px, -idx * Palette.row-height);
+        }
+        if (idx + 1) * Palette.row-height + file-list.viewport-y > file-list.visible-height {
+            file-list.viewport-y = min(0px, file-list.visible-height - (idx + 1) * Palette.row-height);
+        }
+    }
+
     // ── Keyboard handling ───────────────────────────────────────────────────
     forward-focus: fs;
 
@@ -824,7 +834,7 @@ export component MainWindow inherits Window {
                     Rectangle { height: 1px; background: Palette.border; }
 
                     // File list with ListView
-                    ListView {
+                    file-list := ListView {
                         horizontal-stretch: 1;
 
                         for entry[i] in entries : FileRow {
@@ -847,7 +857,7 @@ export component MainWindow inherits Window {
                             }
                             context-menu(mx, my) => {
                                 root.ctx-x = min(max(10px, Palette.sidebar-width + mx), root.width - 230px);
-                                root.ctx-y = min(max(10px, 68px + self.y + my), root.height - 360px);
+                                root.ctx-y = min(max(10px, 68px + file-list.viewport-y + self.y + my), root.height - 360px);
                                 root.ctx-visible = true;
                             }
                         }
