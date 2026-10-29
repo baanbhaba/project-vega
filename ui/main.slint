@@ -1,16 +1,18 @@
 // Vega File Manager — Main Slint UI Definition
 // Dark minimalist theme: OLED black / slate charcoal with accent colors
 
-import { ScrollView } from "std-widgets.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
 
-// ── Data Structs (exported so Rust can use them via include_modules!) ────────
+// ── Data Structs ────────────────────────────────────────────────────────────
 export struct PlaceData {
     name: string,
     path: string,
+    icon: string,
 }
 
 export struct EntryData {
     name: string,
+    icon: string,
     size: string,
     modified: string,
     permissions: string,
@@ -18,7 +20,6 @@ export struct EntryData {
     name-color: color,
     git-color: color,
     is-dir: bool,
-    selected: bool,
 }
 
 // ── Palette ─────────────────────────────────────────────────────────────────
@@ -28,16 +29,17 @@ global Palette {
     out property <color> bg-surface:   #161616;   // Panel surface
     out property <color> bg-elevated:  #1e1e1e;   // Elevated cards / modals
     out property <color> bg-hover:     #252525;   // Item hover
-    out property <color> bg-selected:  #2a2a3a;   // Item selected
+    out property <color> bg-selected:  #2f2d4a;   // Item selected (rich indigo tint)
 
     // Text
     out property <color> text-primary:   #f0f0f0;
-    out property <color> text-secondary: #909090;
-    out property <color> text-dim:       #555555;
+    out property <color> text-secondary: #9a9a9a;
+    out property <color> text-dim:       #5a5a5a;
 
     // Accent
     out property <color> accent:         #7c6af0;  // Purple-violet accent
     out property <color> accent-dim:     #3d3578;
+    out property <color> accent-hover:   #9282f5;
 
     // File category colors
     out property <color> cat-code:       #61d2f0;  // Cyan
@@ -58,21 +60,22 @@ global Palette {
     out property <color> git-conflict:  #f06161;   // Red
 
     // Borders
-    out property <color> border:        #2a2a2a;
+    out property <color> border:        #252525;
     out property <color> border-focus:  #7c6af0;
 
     // Sizes
-    out property <length> sidebar-width: 220px;
+    out property <length> sidebar-width: 210px;
     out property <length> toolbar-height: 42px;
-    out property <length> row-height: 28px;
+    out property <length> row-height: 30px;
     out property <length> radius: 6px;
 }
 
 // ── Reusable Components ──────────────────────────────────────────────────────
 
-// A single file row in the detail list view.
+// A single file row in the list view
 component FileRow inherits Rectangle {
     in property <string>  name;
+    in property <string>  icon: "📄";
     in property <string>  size;
     in property <string>  modified;
     in property <string>  permissions;
@@ -85,32 +88,19 @@ component FileRow inherits Rectangle {
     callback double-clicked();
 
     height: Palette.row-height;
-    background: selected ? Palette.bg-selected : transparent;
+    background: selected ? Palette.bg-selected : (ta.has-hover ? Palette.bg-hover : transparent);
     border-radius: Palette.radius;
-
-    // Hover state
-    ta := TouchArea {
-        clicked => { root.clicked(); }
-        double-clicked => { root.double-clicked(); }
-    }
-    Rectangle {
-        background: ta.has-hover && !selected ? Palette.bg-hover : transparent;
-        border-radius: Palette.radius;
-        x: 0; y: 0;
-        width: root.width; height: root.height;
-    }
 
     HorizontalLayout {
         padding-left: 8px;
         padding-right: 8px;
         spacing: 0px;
 
-        // Icon placeholder
+        // Icon
         Rectangle {
-            width: 22px;
-            height: Palette.row-height;
+            width: 26px;
             Text {
-                text: is-dir ? "📁" : "📄";
+                text: icon;
                 font-size: 13px;
                 vertical-alignment: center;
                 horizontal-alignment: center;
@@ -122,6 +112,7 @@ component FileRow inherits Rectangle {
             text: name;
             color: name-color;
             font-size: 13px;
+            font-weight: is-dir ? 600 : 400;
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
@@ -129,7 +120,7 @@ component FileRow inherits Rectangle {
 
         // Git badge
         Rectangle {
-            width: 50px;
+            width: 45px;
             Text {
                 text: git-label;
                 color: git-color;
@@ -142,7 +133,7 @@ component FileRow inherits Rectangle {
 
         // Size
         Rectangle {
-            width: 80px;
+            width: 75px;
             Text {
                 text: size;
                 color: Palette.text-secondary;
@@ -154,7 +145,7 @@ component FileRow inherits Rectangle {
 
         // Modified
         Rectangle {
-            width: 100px;
+            width: 120px;
             Text {
                 text: modified;
                 color: Palette.text-secondary;
@@ -166,7 +157,7 @@ component FileRow inherits Rectangle {
 
         // Permissions
         Rectangle {
-            width: 90px;
+            width: 85px;
             Text {
                 text: permissions;
                 color: Palette.text-dim;
@@ -176,6 +167,14 @@ component FileRow inherits Rectangle {
                 horizontal-alignment: right;
             }
         }
+    }
+
+    // TouchArea covers full row on top of contents
+    ta := TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { root.clicked(); }
+        double-clicked => { root.double-clicked(); }
     }
 }
 
@@ -188,15 +187,14 @@ component Toolbar inherits Rectangle {
     callback go-forward();
     callback go-up();
     callback toggle-hidden();
-    callback open-command-palette();
-    callback create-folder();
+    callback open-create-dialog();
+    callback open-rename-dialog();
     callback open-terminal();
     callback trash-selected();
     callback refresh();
 
     height: Palette.toolbar-height;
     background: Palette.bg-surface;
-    border-width: 0px;
 
     HorizontalLayout {
         padding: 6px;
@@ -207,9 +205,9 @@ component Toolbar inherits Rectangle {
             width: 28px; height: 28px;
             background: back-ta.has-hover ? Palette.bg-hover : transparent;
             border-radius: Palette.radius;
-            back-ta := TouchArea { clicked => { root.go-back(); } }
             Text { text: "◀"; font-size: 12px; color: Palette.text-secondary;
                    vertical-alignment: center; horizontal-alignment: center; }
+            back-ta := TouchArea { width: 100%; height: 100%; clicked => { root.go-back(); } }
         }
 
         // Forward button
@@ -217,9 +215,9 @@ component Toolbar inherits Rectangle {
             width: 28px; height: 28px;
             background: fwd-ta.has-hover ? Palette.bg-hover : transparent;
             border-radius: Palette.radius;
-            fwd-ta := TouchArea { clicked => { root.go-forward(); } }
             Text { text: "▶"; font-size: 12px; color: Palette.text-secondary;
                    vertical-alignment: center; horizontal-alignment: center; }
+            fwd-ta := TouchArea { width: 100%; height: 100%; clicked => { root.go-forward(); } }
         }
 
         // Up button
@@ -227,9 +225,9 @@ component Toolbar inherits Rectangle {
             width: 28px; height: 28px;
             background: up-ta.has-hover ? Palette.bg-hover : transparent;
             border-radius: Palette.radius;
-            up-ta := TouchArea { clicked => { root.go-up(); } }
             Text { text: "↑"; font-size: 14px; color: Palette.text-secondary;
                    vertical-alignment: center; horizontal-alignment: center; }
+            up-ta := TouchArea { width: 100%; height: 100%; clicked => { root.go-up(); } }
         }
 
         // Path input
@@ -273,9 +271,19 @@ component Toolbar inherits Rectangle {
             width: 32px; height: 28px;
             background: newf-ta.has-hover ? Palette.bg-hover : transparent;
             border-radius: Palette.radius;
-            newf-ta := TouchArea { clicked => { root.create-folder(); } }
-            Text { text: "📁+"; font-size: 11px; color: Palette.text-secondary;
+            Text { text: "📁+"; font-size: 12px; color: Palette.text-secondary;
                    vertical-alignment: center; horizontal-alignment: center; }
+            newf-ta := TouchArea { width: 100%; height: 100%; clicked => { root.open-create-dialog(); } }
+        }
+
+        // Rename button
+        Rectangle {
+            width: 28px; height: 28px;
+            background: ren-ta.has-hover ? Palette.bg-hover : transparent;
+            border-radius: Palette.radius;
+            Text { text: "✏️"; font-size: 12px; color: Palette.text-secondary;
+                   vertical-alignment: center; horizontal-alignment: center; }
+            ren-ta := TouchArea { width: 100%; height: 100%; clicked => { root.open-rename-dialog(); } }
         }
 
         // Open terminal button
@@ -283,9 +291,9 @@ component Toolbar inherits Rectangle {
             width: 30px; height: 28px;
             background: term-ta.has-hover ? Palette.bg-hover : transparent;
             border-radius: Palette.radius;
-            term-ta := TouchArea { clicked => { root.open-terminal(); } }
             Text { text: "💻"; font-size: 12px; color: Palette.text-secondary;
                    vertical-alignment: center; horizontal-alignment: center; }
+            term-ta := TouchArea { width: 100%; height: 100%; clicked => { root.open-terminal(); } }
         }
 
         // Trash selected button
@@ -293,19 +301,9 @@ component Toolbar inherits Rectangle {
             width: 28px; height: 28px;
             background: trash-ta.has-hover ? Palette.bg-hover : transparent;
             border-radius: Palette.radius;
-            trash-ta := TouchArea { clicked => { root.trash-selected(); } }
             Text { text: "🗑"; font-size: 12px; color: Palette.text-secondary;
                    vertical-alignment: center; horizontal-alignment: center; }
-        }
-
-        // Refresh button
-        Rectangle {
-            width: 28px; height: 28px;
-            background: ref-ta.has-hover ? Palette.bg-hover : transparent;
-            border-radius: Palette.radius;
-            ref-ta := TouchArea { clicked => { root.refresh(); } }
-            Text { text: "🔄"; font-size: 11px; color: Palette.text-secondary;
-                   vertical-alignment: center; horizontal-alignment: center; }
+            trash-ta := TouchArea { width: 100%; height: 100%; clicked => { root.trash-selected(); } }
         }
 
         // Show/hide hidden files toggle
@@ -313,19 +311,19 @@ component Toolbar inherits Rectangle {
             width: 28px; height: 28px;
             background: hidden-ta.has-hover ? Palette.bg-hover : transparent;
             border-radius: Palette.radius;
-            hidden-ta := TouchArea { clicked => { root.toggle-hidden(); } }
             Text { text: "👁"; font-size: 12px; color: Palette.text-secondary;
                    vertical-alignment: center; horizontal-alignment: center; }
+            hidden-ta := TouchArea { width: 100%; height: 100%; clicked => { root.toggle-hidden(); } }
         }
 
-        // Command palette button
+        // Refresh button
         Rectangle {
             width: 28px; height: 28px;
-            background: cmd-ta.has-hover ? Palette.bg-hover : transparent;
+            background: ref-ta.has-hover ? Palette.bg-hover : transparent;
             border-radius: Palette.radius;
-            cmd-ta := TouchArea { clicked => { root.open-command-palette(); } }
-            Text { text: "⌘"; font-size: 14px; color: Palette.text-secondary;
+            Text { text: "🔄"; font-size: 11px; color: Palette.text-secondary;
                    vertical-alignment: center; horizontal-alignment: center; }
+            ref-ta := TouchArea { width: 100%; height: 100%; clicked => { root.refresh(); } }
         }
     }
 }
@@ -341,15 +339,15 @@ component Sidebar inherits Rectangle {
 
     VerticalLayout {
         padding: 8px;
-        spacing: 4px;
+        spacing: 3px;
 
-        // Places header
         Text {
             text: "PLACES";
             color: Palette.text-dim;
             font-size: 10px;
+            font-weight: 700;
             letter-spacing: 1.5px;
-            height: 24px;
+            height: 22px;
             vertical-alignment: center;
         }
 
@@ -357,27 +355,43 @@ component Sidebar inherits Rectangle {
             height: 30px;
             background: place-ta.has-hover ? Palette.bg-hover : transparent;
             border-radius: Palette.radius;
-            place-ta := TouchArea {
-                clicked => { root.navigate-to(place.path); }
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 8px;
+
+                Text {
+                    text: place.icon;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: place.name;
+                    color: Palette.text-secondary;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
             }
-            Text {
-                x: 12px;
-                text: place.name;
-                color: Palette.text-secondary;
-                font-size: 13px;
-                vertical-alignment: center;
+
+            place-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => { root.navigate-to(place.path); }
             }
         }
 
         Rectangle { height: 1px; background: Palette.border; }
 
-        // Search / Filter box
         Text {
-            text: "FILTER & SEARCH";
+            text: "SEARCH / FILTER";
             color: Palette.text-dim;
             font-size: 10px;
+            font-weight: 700;
             letter-spacing: 1.5px;
-            height: 24px;
+            height: 22px;
             vertical-alignment: center;
         }
 
@@ -411,7 +425,6 @@ component StatusBar inherits Rectangle {
 
     height: 24px;
     background: Palette.bg-surface;
-    border-width: 0px;
 
     HorizontalLayout {
         padding-left: 12px;
@@ -449,98 +462,237 @@ export component MainWindow inherits Window {
     min-width: 800px;
     min-height: 500px;
 
-    // ── Exposed properties (set from Rust) ──────────────────────────────────
+    // ── Exposed properties ──────────────────────────────────────────────────
     in-out property <string> current-path: "/home";
     in property <string> git-branch: "";
     in property <string> filter-text: "";
     in property <string> item-count: "0 items";
     in property <string> selected-info: "";
     in property <string> disk-info: "";
+    in-out property <int> selected-index: -1;
+    in property <string> sort-column: "name";
+    in property <string> sort-direction: "asc";
     in property <[PlaceData]> places: [];
     in property <[EntryData]> entries: [];
 
-    // ── Callbacks (handled in Rust) ─────────────────────────────────────────
+    // ── Dialog properties ───────────────────────────────────────────────────
+    in-out property <bool> dialog-visible: false;
+    in-out property <string> dialog-title: "New Folder";
+    in-out property <string> dialog-value: "";
+    in-out property <string> dialog-action: "new_folder";
+
+    // ── Callbacks ───────────────────────────────────────────────────────────
     callback navigate-to(string);
     callback go-back();
     callback go-forward();
     callback go-up();
     callback toggle-hidden();
-    callback open-command-palette();
     callback entry-clicked(int);
     callback entry-double-clicked(int);
     callback filter-changed(string);
-    callback create-folder();
+    callback create-folder(string);
+    callback rename-item(string);
     callback open-terminal();
     callback trash-selected();
     callback refresh();
+    callback select-prev();
+    callback select-next();
+    callback activate-selected();
+    callback sort-by(string);
+    callback copy-selected();
+    callback cut-selected();
+    callback paste-clipboard();
 
-    // ── Layout ──────────────────────────────────────────────────────────────
-    VerticalLayout {
-        spacing: 0px;
+    // ── Keyboard handling ───────────────────────────────────────────────────
+    forward-focus: fs;
 
-        // Toolbar
-        Toolbar {
-            current-path <=> root.current-path;
-            git-branch: root.git-branch;
-            navigate-to(p) => { root.navigate-to(p); }
-            go-back => { root.go-back(); }
-            go-forward => { root.go-forward(); }
-            go-up => { root.go-up(); }
-            toggle-hidden => { root.toggle-hidden(); }
-            open-command-palette => { root.open-command-palette(); }
-            create-folder => { root.create-folder(); }
-            open-terminal => { root.open-terminal(); }
-            trash-selected => { root.trash-selected(); }
-            refresh => { root.refresh(); }
-        }
-
-        // Column header bar
-        Rectangle {
-            height: 24px;
-            background: Palette.bg-surface;
-            border-width: 0px;
-            HorizontalLayout {
-                padding-left: 36px;
-                padding-right: 8px;
-                Text { text: "Name"; color: Palette.text-dim; font-size: 11px;
-                       vertical-alignment: center; horizontal-stretch: 1; }
-                Rectangle { width: 50px; Text { text: "Git"; color: Palette.text-dim;
-                    font-size: 11px; vertical-alignment: center; horizontal-alignment: center; } }
-                Rectangle { width: 80px; Text { text: "Size"; color: Palette.text-dim;
-                    font-size: 11px; vertical-alignment: center; horizontal-alignment: right; } }
-                Rectangle { width: 100px; Text { text: "Modified"; color: Palette.text-dim;
-                    font-size: 11px; vertical-alignment: center; horizontal-alignment: right; } }
-                Rectangle { width: 90px; Text { text: "Perms"; color: Palette.text-dim;
-                    font-size: 11px; vertical-alignment: center; horizontal-alignment: right; } }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.UpArrow {
+                root.select-prev();
+                return accept;
             }
+            if event.text == Key.DownArrow {
+                root.select-next();
+                return accept;
+            }
+            if event.text == Key.Return {
+                root.activate-selected();
+                return accept;
+            }
+            if event.text == Key.Backspace {
+                root.go-up();
+                return accept;
+            }
+            if event.modifiers.control && (event.text == "h" || event.text == "H") {
+                root.toggle-hidden();
+                return accept;
+            }
+            if event.modifiers.control && (event.text == "r" || event.text == "R") {
+                root.refresh();
+                return accept;
+            }
+            if event.modifiers.control && (event.text == "c" || event.text == "C") {
+                root.copy-selected();
+                return accept;
+            }
+            if event.modifiers.control && (event.text == "x" || event.text == "X") {
+                root.cut-selected();
+                return accept;
+            }
+            if event.modifiers.control && (event.text == "v" || event.text == "V") {
+                root.paste-clipboard();
+                return accept;
+            }
+            if event.modifiers.control && (event.text == "t" || event.text == "T") {
+                root.open-terminal();
+                return accept;
+            }
+            if event.text == Key.Delete {
+                root.trash-selected();
+                return accept;
+            }
+            if event.text == Key.F2 {
+                root.dialog-title = "Rename Item";
+                root.dialog-action = "rename";
+                root.dialog-visible = true;
+                return accept;
+            }
+            reject
         }
 
-        // Main content row
-        HorizontalLayout {
-            vertical-stretch: 1;
+        // ── Main Layout ─────────────────────────────────────────────────────
+        VerticalLayout {
             spacing: 0px;
 
-            // Sidebar
-            Sidebar {
-                places: root.places;
+            // Toolbar
+            Toolbar {
+                current-path <=> root.current-path;
+                git-branch: root.git-branch;
                 navigate-to(p) => { root.navigate-to(p); }
-                filter-changed(q) => { root.filter-changed(q); }
+                go-back => { root.go-back(); }
+                go-forward => { root.go-forward(); }
+                go-up => { root.go-up(); }
+                toggle-hidden => { root.toggle-hidden(); }
+                open-create-dialog => {
+                    root.dialog-title = "Create New Folder";
+                    root.dialog-value = "New Folder";
+                    root.dialog-action = "new_folder";
+                    root.dialog-visible = true;
+                }
+                open-rename-dialog => {
+                    root.dialog-title = "Rename Item";
+                    root.dialog-action = "rename";
+                    root.dialog-visible = true;
+                }
+                open-terminal => { root.open-terminal(); }
+                trash-selected => { root.trash-selected(); }
+                refresh => { root.refresh(); }
             }
 
-            // Vertical divider
-            Rectangle { width: 1px; background: Palette.border; }
+            // Column header bar
+            Rectangle {
+                height: 26px;
+                background: Palette.bg-surface;
+                border-width: 0px;
+                HorizontalLayout {
+                    padding-left: 36px;
+                    padding-right: 8px;
+                    spacing: 0px;
 
-            // File list — virtualized scroll
-            ScrollView {
-                horizontal-stretch: 1;
-                viewport-height: entries.length * Palette.row-height;
+                    // Name column header
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        Text {
+                            text: root.sort-column == "name" ?
+                                (root.sort-direction == "asc" ? "Name ▲" : "Name ▼") : "Name";
+                            color: root.sort-column == "name" ? Palette.accent : Palette.text-dim;
+                            font-size: 11px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                        name-ta := TouchArea {
+                            width: 100%; height: 100%;
+                            clicked => { root.sort-by("name"); }
+                        }
+                    }
 
-                VerticalLayout {
-                    spacing: 1px;
-                    padding: 4px;
+                    // Git column header
+                    Rectangle {
+                        width: 45px;
+                        Text { text: "Git"; color: Palette.text-dim;
+                            font-size: 11px; font-weight: 600;
+                            vertical-alignment: center; horizontal-alignment: center; }
+                    }
+
+                    // Size column header
+                    Rectangle {
+                        width: 75px;
+                        Text {
+                            text: root.sort-column == "size" ?
+                                (root.sort-direction == "asc" ? "Size ▲" : "Size ▼") : "Size";
+                            color: root.sort-column == "size" ? Palette.accent : Palette.text-dim;
+                            font-size: 11px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                        }
+                        size-ta := TouchArea {
+                            width: 100%; height: 100%;
+                            clicked => { root.sort-by("size"); }
+                        }
+                    }
+
+                    // Modified column header
+                    Rectangle {
+                        width: 120px;
+                        Text {
+                            text: root.sort-column == "modified" ?
+                                (root.sort-direction == "asc" ? "Modified ▲" : "Modified ▼") : "Modified";
+                            color: root.sort-column == "modified" ? Palette.accent : Palette.text-dim;
+                            font-size: 11px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                        }
+                        mod-ta := TouchArea {
+                            width: 100%; height: 100%;
+                            clicked => { root.sort-by("modified"); }
+                        }
+                    }
+
+                    // Perms column header
+                    Rectangle {
+                        width: 85px;
+                        Text { text: "Perms"; color: Palette.text-dim;
+                            font-size: 11px; font-weight: 600;
+                            vertical-alignment: center; horizontal-alignment: right; }
+                    }
+                }
+            }
+
+            // Main content row
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 0px;
+
+                // Sidebar
+                Sidebar {
+                    places: root.places;
+                    navigate-to(p) => { root.navigate-to(p); }
+                    filter-changed(q) => { root.filter-changed(q); }
+                }
+
+                // Vertical divider
+                Rectangle { width: 1px; background: Palette.border; }
+
+                // File list with ListView (smooth scrolling and fast virtualization)
+                ListView {
+                    horizontal-stretch: 1;
 
                     for entry[i] in entries : FileRow {
                         name: entry.name;
+                        icon: entry.icon;
                         size: entry.size;
                         modified: entry.modified;
                         permissions: entry.permissions;
@@ -548,19 +700,132 @@ export component MainWindow inherits Window {
                         name-color: entry.name-color;
                         git-color: entry.git-color;
                         is-dir: entry.is-dir;
-                        selected: entry.selected;
-                        clicked => { root.entry-clicked(i); }
-                        double-clicked => { root.entry-double-clicked(i); }
+                        selected: i == root.selected-index;
+                        clicked => {
+                            root.selected-index = i;
+                            root.entry-clicked(i);
+                        }
+                        double-clicked => {
+                            root.entry-double-clicked(i);
+                        }
                     }
                 }
             }
+
+            // Status bar
+            StatusBar {
+                item-count: root.item-count;
+                selected-info: root.selected-info;
+                disk-info: root.disk-info;
+            }
+        }
+    }
+
+    // ── Modal Dialog Overlay (New Folder / Rename) ──────────────────────────
+    if dialog-visible : Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000a0;
+
+        TouchArea {
+            // Dismiss dialog when clicking the shaded backdrop
+            clicked => { root.dialog-visible = false; }
         }
 
-        // Status bar
-        StatusBar {
-            item-count: root.item-count;
-            selected-info: root.selected-info;
-            disk-info: root.disk-info;
+        Rectangle {
+            width: 380px;
+            height: 150px;
+            background: Palette.bg-elevated;
+            border-radius: Palette.radius * 2;
+            border-width: 1px;
+            border-color: Palette.border-focus;
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+
+                Text {
+                    text: root.dialog-title;
+                    color: Palette.text-primary;
+                    font-size: 14px;
+                    font-weight: 700;
+                }
+
+                Rectangle {
+                    height: 34px;
+                    background: Palette.bg-surface;
+                    border-radius: Palette.radius;
+                    border-width: 1px;
+                    border-color: Palette.border;
+
+                    modal-input := TextInput {
+                        x: 10px; y: 0;
+                        width: parent.width - 20px;
+                        height: parent.height;
+                        text: root.dialog-value;
+                        color: Palette.text-primary;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                        accepted => {
+                            if root.dialog-action == "new_folder" {
+                                root.create-folder(self.text);
+                            } else {
+                                root.rename-item(self.text);
+                            }
+                            root.dialog-visible = false;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+
+                    Rectangle {
+                        width: 75px; height: 30px;
+                        background: cancel-btn-ta.has-hover ? Palette.bg-hover : Palette.bg-surface;
+                        border-radius: Palette.radius;
+                        Text {
+                            text: "Cancel";
+                            color: Palette.text-secondary;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                        cancel-btn-ta := TouchArea {
+                            width: 100%; height: 100%;
+                            clicked => { root.dialog-visible = false; }
+                        }
+                    }
+
+                    Rectangle {
+                        width: 75px; height: 30px;
+                        background: ok-btn-ta.has-hover ? Palette.accent-hover : Palette.accent;
+                        border-radius: Palette.radius;
+                        Text {
+                            text: "OK";
+                            color: #ffffff;
+                            font-size: 12px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                        ok-btn-ta := TouchArea {
+                            width: 100%; height: 100%;
+                            clicked => {
+                                if root.dialog-action == "new_folder" {
+                                    root.create-folder(modal-input.text);
+                                } else {
+                                    root.rename-item(modal-input.text);
+                                }
+                                root.dialog-visible = false;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
