@@ -7,6 +7,11 @@ use std::path::{Path, PathBuf};
 
 /// Expand `~` to the user's home directory.
 pub fn expand_tilde(path: &str) -> PathBuf {
+    if path == "~" {
+        if let Some(home) = dirs_next::home_dir() {
+            return home;
+        }
+    }
     if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = dirs_next::home_dir() {
             return home.join(rest);
